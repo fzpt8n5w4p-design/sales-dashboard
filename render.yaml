@@ -7,3 +7,5 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
+      - key: VEEQO_API_KEY
+        sync: false

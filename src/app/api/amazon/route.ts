@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   const required = ['AMAZON_SELLER_ID','AMAZON_CLIENT_ID','AMAZON_CLIENT_SECRET','AMAZON_REFRESH_TOKEN']
   const missing = required.filter(k => !process.env[k])
   if (missing.length) {
-    return NextResponse.json({ ok: false, error: `Missing env vars: ${missing.join(', ')}` }, { status: 500 })
+    return NextResponse.json({ ok: false, configured: false, error: 'Amazon SP-API not configured' })
   }
 
   const { searchParams } = req.nextUrl

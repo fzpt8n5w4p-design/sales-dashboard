@@ -6,7 +6,7 @@ export async function GET() {
   const range = process.env.GOOGLE_SHEETS_RANGE || 'Targets!A1:D20'
 
   if (!apiKey || !sheetId) {
-    return NextResponse.json({ ok: false, error: 'GOOGLE_SHEETS_API_KEY or GOOGLE_SHEETS_ID not set' }, { status: 500 })
+    return NextResponse.json({ ok: false, configured: false, error: 'Google Sheets not configured' })
   }
 
   try {

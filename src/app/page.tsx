@@ -16,7 +16,7 @@ const ResponsiveGridLayout = WidthProvider(Responsive)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DateRange = 'today' | 'yesterday' | '7days' | '30days'
-type ApiStatus = 'idle' | 'ok' | 'error' | 'loading'
+type ApiStatus = 'idle' | 'ok' | 'error' | 'loading' | 'unconfigured'
 
 interface VeeqoData {
   orders: { total: number; shipped: number; pending: number; revenue: number; hourly: Record<number, number> }
@@ -44,7 +44,7 @@ const pct = (a: number, b: number) => b ? ((a / b) * 100).toFixed(1) + '%' : '--
 
 function StatusDot({ status }: { status: ApiStatus }) {
   const colours: Record<ApiStatus, string> = {
-    ok: '#22c55e', error: '#f87171', loading: '#475569', idle: '#334155'
+    ok: '#22c55e', error: '#f87171', loading: '#475569', idle: '#334155', unconfigured: '#475569'
   }
   return (
     <span
@@ -220,12 +220,23 @@ function VeeqoStockWidget({ data, loading }: { data?: VeeqoData; loading: boolea
   )
 }
 
-function AmazonWidget({ data, loading }: { data?: AmazonData; loading: boolean }) {
+function NotConfigured({ name }: { name: string }) {
+  return (
+    <div style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>
+      <div style={{ marginBottom: 4 }}>Not configured</div>
+      <div style={{ fontSize: 9, color: '#334155' }}>Add {name} credentials in Render environment variables to enable this widget.</div>
+    </div>
+  )
+}
+
+function AmazonWidget({ data, loading, unconfigured }: { data?: AmazonData; loading: boolean; unconfigured?: boolean }) {
   return (
     <Card>
       <Tag label="Amazon SP-API" type="amazon" />
       <SectionLabel>Orders & Revenue</SectionLabel>
-      {loading ? (
+      {unconfigured ? (
+        <NotConfigured name="Amazon SP-API" />
+      ) : loading ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : (
         <>
@@ -261,12 +272,14 @@ function AmazonWidget({ data, loading }: { data?: AmazonData; loading: boolean }
   )
 }
 
-function EbayWidget({ data, loading }: { data?: EbayData; loading: boolean }) {
+function EbayWidget({ data, loading, unconfigured }: { data?: EbayData; loading: boolean; unconfigured?: boolean }) {
   return (
     <Card>
       <Tag label="eBay API" type="ebay" />
       <SectionLabel>Orders & Revenue</SectionLabel>
-      {loading ? (
+      {unconfigured ? (
+        <NotConfigured name="eBay" />
+      ) : loading ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : (
         <>
@@ -294,13 +307,15 @@ function EbayWidget({ data, loading }: { data?: EbayData; loading: boolean }) {
   )
 }
 
-function SheetsWidget({ data, loading }: { data?: SheetsData; loading: boolean }) {
+function SheetsWidget({ data, loading, unconfigured }: { data?: SheetsData; loading: boolean; unconfigured?: boolean }) {
   const barColours = ['#38bdf8', '#a78bfa', '#4ade80', '#f59e0b', '#f87171', '#22c55e']
   return (
     <Card>
       <Tag label="Google Sheets" type="sheets" />
       <SectionLabel>Targets vs Actual</SectionLabel>
-      {loading ? (
+      {unconfigured ? (
+        <NotConfigured name="Google Sheets" />
+      ) : loading ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !data?.metrics.length ? (
         <div style={{ fontSize: 10, color: '#475569' }}>No data — check sheet format: Metric | Target | Actual | Unit</div>
@@ -387,6 +402,24 @@ const defaultLayouts: Layouts = {
     { i: 'ebay',         x: 3, y: 7, w: 4, h: 5 },
     { i: 'returns',      x: 7, y: 7, w: 3, h: 5 },
     { i: 'sheets',       x: 10, y: 7, w: 2, h: 5 },
+  ],
+  md: [
+    { i: 'veeqo-orders', x: 0, y: 0, w: 4, h: 4 },
+    { i: 'veeqo-shift',  x: 4, y: 0, w: 4, h: 7 },
+    { i: 'amazon',       x: 0, y: 7, w: 4, h: 7 },
+    { i: 'veeqo-stock',  x: 0, y: 4, w: 4, h: 7 },
+    { i: 'ebay',         x: 4, y: 7, w: 4, h: 5 },
+    { i: 'returns',      x: 0, y: 14, w: 4, h: 5 },
+    { i: 'sheets',       x: 4, y: 14, w: 4, h: 5 },
+  ],
+  sm: [
+    { i: 'veeqo-orders', x: 0, y: 0, w: 4, h: 4 },
+    { i: 'veeqo-shift',  x: 0, y: 4, w: 4, h: 7 },
+    { i: 'veeqo-stock',  x: 0, y: 11, w: 4, h: 7 },
+    { i: 'amazon',       x: 0, y: 18, w: 4, h: 7 },
+    { i: 'ebay',         x: 0, y: 25, w: 4, h: 5 },
+    { i: 'returns',      x: 0, y: 30, w: 4, h: 5 },
+    { i: 'sheets',       x: 0, y: 35, w: 4, h: 5 },
   ]
 }
 const LAYOUT_KEY = 'opscore_layouts'
@@ -427,21 +460,21 @@ export default function Dashboard() {
     setStatus('amazon', 'loading')
     fetch(`/api/amazon?range=${r}`)
       .then(res => res.json())
-      .then(d => { if (d.ok) { setAmazonData(d); setStatus('amazon', 'ok') } else { setStatus('amazon', 'error'); console.error('Amazon:', d.error) } })
+      .then(d => { if (d.ok) { setAmazonData(d); setStatus('amazon', 'ok') } else if (d.configured === false) { setStatus('amazon', 'unconfigured') } else { setStatus('amazon', 'error'); console.error('Amazon:', d.error) } })
       .catch(() => setStatus('amazon', 'error'))
 
     // eBay
     setStatus('ebay', 'loading')
     fetch(`/api/ebay?range=${r}`)
       .then(res => res.json())
-      .then(d => { if (d.ok) { setEbayData(d); setStatus('ebay', 'ok') } else { setStatus('ebay', 'error'); console.error('eBay:', d.error) } })
+      .then(d => { if (d.ok) { setEbayData(d); setStatus('ebay', 'ok') } else if (d.configured === false) { setStatus('ebay', 'unconfigured') } else { setStatus('ebay', 'error'); console.error('eBay:', d.error) } })
       .catch(() => setStatus('ebay', 'error'))
 
     // Sheets
     setStatus('sheets', 'loading')
     fetch(`/api/sheets`)
       .then(res => res.json())
-      .then(d => { if (d.ok) { setSheetsData(d); setStatus('sheets', 'ok') } else { setStatus('sheets', 'error'); console.error('Sheets:', d.error) } })
+      .then(d => { if (d.ok) { setSheetsData(d); setStatus('sheets', 'ok') } else if (d.configured === false) { setStatus('sheets', 'unconfigured') } else { setStatus('sheets', 'error'); console.error('Sheets:', d.error) } })
       .catch(() => setStatus('sheets', 'error'))
   }, [])
 
@@ -500,9 +533,9 @@ export default function Dashboard() {
           {/* API status */}
           <div style={{ display: 'flex', gap: 12 }}>
             {(['veeqo','amazon','ebay','sheets'] as const).map(k => (
-              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748b' }}>
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: statuses[k] === 'unconfigured' ? '#334155' : '#64748b' }}>
                 <StatusDot status={statuses[k]} />
-                <span style={{ textTransform: 'capitalize' }}>{k}</span>
+                <span style={{ textTransform: 'capitalize' }}>{k}{statuses[k] === 'unconfigured' ? ' (off)' : ''}</span>
               </div>
             ))}
           </div>
@@ -543,7 +576,7 @@ export default function Dashboard() {
         </div>
         <div key="amazon">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 1 }} />
-          <AmazonWidget data={amazonData} loading={isLoading('amazon')} />
+          <AmazonWidget data={amazonData} loading={isLoading('amazon')} unconfigured={statuses.amazon === 'unconfigured'} />
         </div>
         <div key="veeqo-stock">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 1 }} />
@@ -551,7 +584,7 @@ export default function Dashboard() {
         </div>
         <div key="ebay">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 1 }} />
-          <EbayWidget data={ebayData} loading={isLoading('ebay')} />
+          <EbayWidget data={ebayData} loading={isLoading('ebay')} unconfigured={statuses.ebay === 'unconfigured'} />
         </div>
         <div key="returns">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 1 }} />
@@ -559,7 +592,7 @@ export default function Dashboard() {
         </div>
         <div key="sheets">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 24, zIndex: 1 }} />
-          <SheetsWidget data={sheetsData} loading={isLoading('sheets')} />
+          <SheetsWidget data={sheetsData} loading={isLoading('sheets')} unconfigured={statuses.sheets === 'unconfigured'} />
         </div>
       </ResponsiveGridLayout>
     </div>

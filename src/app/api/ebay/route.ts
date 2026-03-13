@@ -3,7 +3,7 @@ import { subDays, startOfDay, endOfDay } from 'date-fns'
 
 export async function GET(req: NextRequest) {
   const token = process.env.EBAY_TOKEN
-  if (!token) return NextResponse.json({ ok: false, error: 'EBAY_TOKEN not set' }, { status: 500 })
+  if (!token) return NextResponse.json({ ok: false, configured: false, error: 'eBay API not configured' })
 
   const { searchParams } = req.nextUrl
   const range = searchParams.get('range') || 'today'
