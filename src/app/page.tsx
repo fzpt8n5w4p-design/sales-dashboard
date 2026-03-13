@@ -1,10 +1,17 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Responsive, WidthProvider, Layout, Layouts } from 'react-grid-layout'
+// @ts-ignore
+import GridLayout from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 
+type Layout = { i: string; x: number; y: number; w: number; h: number }
+type Layouts = { [key: string]: Layout[] }
+// @ts-ignore
+const Responsive = GridLayout.Responsive || GridLayout
+// @ts-ignore
+const WidthProvider = GridLayout.WidthProvider
 const ResponsiveGridLayout = WidthProvider(Responsive)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -335,10 +342,10 @@ function ReturnsWidget({ amazon, ebay, loading }: { amazon?: AmazonData; ebay?: 
 
   return (
     <Card>
-      <div style={{ marginBottom: 8, display: 'flex', gap: 4 }}>
-  <Tag label="Amazon" type="amazon" />
-  <Tag label="eBay" type="ebay" />
-</div>
+      <div style={{ marginBottom: 8 }}>
+        <Tag label="Amazon" type="amazon" />
+        <Tag label="eBay" type="ebay" style={{ marginLeft: 4 } as any} />
+      </div>
       <SectionLabel>Returns & Cancellations</SectionLabel>
       {loading ? (
         <div className="shimmer" style={{ height: 60 }} />
