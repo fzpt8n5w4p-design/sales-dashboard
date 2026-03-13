@@ -12,7 +12,8 @@ type Layouts = { [key: string]: Layout[] }
 const Responsive = GridLayout.Responsive || GridLayout
 // @ts-ignore
 const WidthProvider = GridLayout.WidthProvider
-const ResponsiveGridLayout = WidthProvider(Responsive)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ResponsiveGridLayout: any = WidthProvider(Responsive)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DateRange = 'today' | 'yesterday' | '7days' | '30days'
