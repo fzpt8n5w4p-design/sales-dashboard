@@ -342,9 +342,9 @@ function ReturnsWidget({ amazon, ebay, loading }: { amazon?: AmazonData; ebay?: 
 
   return (
     <Card>
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 8, display: 'flex', gap: 4 }}>
         <Tag label="Amazon" type="amazon" />
-        <Tag label="eBay" type="ebay" style={{ marginLeft: 4 } as any} />
+        <Tag label="eBay" type="ebay" />
       </div>
       <SectionLabel>Returns & Cancellations</SectionLabel>
       {loading ? (
