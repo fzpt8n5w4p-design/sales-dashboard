@@ -133,11 +133,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 // ─── Widget Components ────────────────────────────────────────────────────────
 function VeeqoOrdersWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   return (
     <Card>
       <Tag label="Veeqo" type="veeqo" />
       <SectionLabel>Orders & Revenue</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <><div className="shimmer" style={{ height: 28, width: '60%', marginBottom: 12 }} /><div className="shimmer" style={{ height: 22, width: '40%' }} /></>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -150,6 +151,7 @@ function VeeqoOrdersWidget({ data, loading }: { data?: VeeqoData; loading: boole
 }
 
 function VeeqoChannelsWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   const channels = data?.channels || []
   const totalRev = channels.reduce((s, c) => s + c.revenue, 0)
   const channelColours = ['#38bdf8', '#f59e0b', '#a78bfa', '#4ade80', '#f87171', '#fb923c']
@@ -157,7 +159,7 @@ function VeeqoChannelsWidget({ data, loading }: { data?: VeeqoData; loading: boo
     <Card>
       <Tag label="Veeqo" type="veeqo" />
       <SectionLabel>Revenue by Channel</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !channels.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No orders yet</div>
@@ -185,13 +187,14 @@ function VeeqoChannelsWidget({ data, loading }: { data?: VeeqoData; loading: boo
 }
 
 function VeeqoOrdersByChannelWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   const channels = data?.channels || []
   const channelColours = ['#38bdf8', '#f59e0b', '#a78bfa', '#4ade80', '#f87171', '#fb923c']
   return (
     <Card>
       <Tag label="Veeqo" type="veeqo" />
       <SectionLabel>Orders by Channel</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !channels.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No orders yet</div>
@@ -216,12 +219,13 @@ function VeeqoOrdersByChannelWidget({ data, loading }: { data?: VeeqoData; loadi
 }
 
 function VeeqoTopSkusWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   const skus = data?.topSkus || []
   return (
     <Card>
       <Tag label="Veeqo" type="veeqo" />
       <SectionLabel>Best Selling SKUs (Overall)</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !skus.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No sales yet</div>
@@ -250,6 +254,7 @@ function VeeqoTopSkusWidget({ data, loading }: { data?: VeeqoData; loading: bool
 }
 
 function VeeqoTopSkusByChannelWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   const byChannel = data?.topSkusByChannel || {}
   const channelNames = Object.keys(byChannel)
   const channelColours: Record<string, string> = {}
@@ -260,7 +265,7 @@ function VeeqoTopSkusByChannelWidget({ data, loading }: { data?: VeeqoData; load
     <Card>
       <Tag label="Veeqo" type="veeqo" />
       <SectionLabel>Top SKUs by Channel</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !channelNames.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No sales yet</div>
@@ -285,6 +290,7 @@ function VeeqoTopSkusByChannelWidget({ data, loading }: { data?: VeeqoData; load
 }
 
 function VeeqoShiftWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
@@ -294,7 +300,7 @@ function VeeqoShiftWidget({ data, loading }: { data?: VeeqoData; loading: boolea
           <div style={{ fontSize: 15, color: '#38bdf8', fontWeight: 700 }}>17:30</div>
         </div>
       </div>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 60 }} />
       ) : (
         <>
@@ -317,11 +323,12 @@ function VeeqoShiftWidget({ data, loading }: { data?: VeeqoData; loading: boolea
 }
 
 function VeeqoStockWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   return (
     <Card>
       <Tag label="Veeqo — Inventory" type="veeqo" />
       <SectionLabel>Stock alerts</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : (
         <>
@@ -361,6 +368,7 @@ function VeeqoStockWidget({ data, loading }: { data?: VeeqoData; loading: boolea
 }
 
 function VeeqoStockValueWidget({ data, loading }: { data?: VeeqoData; loading: boolean }) {
+  const showShimmer = loading && !data
   const warehouses = data?.stockByWarehouse || []
   const total = data?.totalStockValue ?? 0
   const totalUnits = warehouses.reduce((s, w) => s + w.units, 0)
@@ -369,7 +377,7 @@ function VeeqoStockValueWidget({ data, loading }: { data?: VeeqoData; loading: b
     <Card>
       <Tag label="Veeqo — Inventory" type="veeqo" />
       <SectionLabel>Stock Value by Warehouse</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !warehouses.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No stock data</div>
@@ -403,11 +411,12 @@ function VeeqoStockValueWidget({ data, loading }: { data?: VeeqoData; loading: b
 }
 
 function AmazonWidget({ data, loading }: { data?: AmazonData; loading: boolean }) {
+  const showShimmer = loading && !data
   return (
     <Card>
       <Tag label="Amazon SP-API" type="amazon" />
       <SectionLabel>Orders & Revenue</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : (
         <>
@@ -444,11 +453,12 @@ function AmazonWidget({ data, loading }: { data?: AmazonData; loading: boolean }
 }
 
 function EbayWidget({ data, loading }: { data?: EbayData; loading: boolean }) {
+  const showShimmer = loading && !data
   return (
     <Card>
       <Tag label="eBay API" type="ebay" />
       <SectionLabel>Orders & Revenue</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : (
         <>
@@ -477,12 +487,13 @@ function EbayWidget({ data, loading }: { data?: EbayData; loading: boolean }) {
 }
 
 function SheetsWidget({ data, loading }: { data?: SheetsData; loading: boolean }) {
+  const showShimmer = loading && !data
   const barColours = ['#38bdf8', '#a78bfa', '#4ade80', '#f59e0b', '#f87171', '#22c55e']
   return (
     <Card>
       <Tag label="Google Sheets" type="sheets" />
       <SectionLabel>Targets vs Actual</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 80 }} />
       ) : !data?.metrics.length ? (
         <div style={{ fontSize: 13, color: '#475569' }}>No data — check sheet format: Metric | Target | Actual | Unit</div>
@@ -514,6 +525,7 @@ function SheetsWidget({ data, loading }: { data?: SheetsData; loading: boolean }
 }
 
 function ReturnsWidget({ amazon, ebay, loading }: { amazon?: AmazonData; ebay?: EbayData; loading: boolean }) {
+  const showShimmer = loading && !amazon && !ebay
   const rows = [
     { ch: 'Amazon UK', returns: 0, cancels: amazon?.returns.cancelled ?? 0 },
     { ch: 'eBay UK', returns: ebay?.returns.returns ?? 0, cancels: ebay?.returns.cancelled ?? 0 },
@@ -529,7 +541,7 @@ function ReturnsWidget({ amazon, ebay, loading }: { amazon?: AmazonData; ebay?: 
         <Tag label="eBay" type="ebay" />
       </div>
       <SectionLabel>Returns & Cancellations</SectionLabel>
-      {loading ? (
+      {showShimmer ? (
         <div className="shimmer" style={{ height: 60 }} />
       ) : (
         <>
