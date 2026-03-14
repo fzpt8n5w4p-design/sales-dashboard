@@ -7,3 +7,31 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
+      - key: VEEQO_API_KEY
+        sync: false
+      - key: AMAZON_SELLER_ID
+        sync: false
+      - key: AMAZON_CLIENT_ID
+        sync: false
+      - key: AMAZON_CLIENT_SECRET
+        sync: false
+      - key: AMAZON_REFRESH_TOKEN
+        sync: false
+      - key: AMAZON_MARKETPLACE_ID
+        sync: false
+      - key: AMAZON_SELLER_RATING
+        sync: false
+      - key: EBAY_TOKEN
+        sync: false
+      - key: EBAY_ENV
+        sync: false
+      - key: GOOGLE_SHEETS_API_KEY
+        sync: false
+      - key: GOOGLE_SHEETS_ID
+        sync: false
+      - key: GOOGLE_SHEETS_RANGE
+        sync: false
+      - key: NEXT_PUBLIC_CURRENCY
+        value: "£"
+      - key: NEXT_PUBLIC_REFRESH_INTERVAL
+        value: "60"

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const apiKey = process.env.GOOGLE_SHEETS_API_KEY
   const sheetId = process.env.GOOGLE_SHEETS_ID
@@ -11,7 +13,7 @@ export async function GET() {
 
   try {
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}?key=${apiKey}`
-    const res = await fetch(url, { next: { revalidate: 0 } })
+    const res = await fetch(url, { cache: 'no-store' })
     if (!res.ok) {
       const err = await res.json()
       throw new Error(err.error?.message || 'Sheets API error ' + res.status)

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { subDays, startOfDay, endOfDay } from 'date-fns'
 
+export const dynamic = 'force-dynamic'
+
 async function getLwaToken() {
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
@@ -11,7 +13,7 @@ async function getLwaToken() {
       client_id: process.env.AMAZON_CLIENT_ID!,
       client_secret: process.env.AMAZON_CLIENT_SECRET!,
     }),
-    next: { revalidate: 0 }
+    cache: 'no-store'
   })
   if (!res.ok) throw new Error('Amazon LWA auth failed: ' + res.status)
   const data = await res.json()
@@ -21,7 +23,7 @@ async function getLwaToken() {
 async function spFetch(token: string, path: string) {
   const res = await fetch(`https://sellingpartnerapi-eu.amazon.com${path}`, {
     headers: { 'x-amz-access-token': token, 'Content-Type': 'application/json' },
-    next: { revalidate: 0 }
+    cache: 'no-store'
   })
   if (!res.ok) throw new Error(`Amazon SP-API ${res.status} — ${path}`)
   return res.json()
@@ -36,16 +38,23 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = req.nextUrl
   const range = searchParams.get('range') || 'today'
+  const customSince = searchParams.get('since')
+  const customUntil = searchParams.get('until')
   const mkt = process.env.AMAZON_MARKETPLACE_ID || 'A1F83G8C2ARO7P'
 
   try {
     const now = new Date()
     let since: Date, until: Date
-    switch (range) {
-      case 'yesterday': since = startOfDay(subDays(now,1)); until = endOfDay(subDays(now,1)); break
-      case '7days':     since = startOfDay(subDays(now,7)); until = endOfDay(now); break
-      case '30days':    since = startOfDay(subDays(now,30)); until = endOfDay(now); break
-      default:          since = startOfDay(now); until = endOfDay(now)
+    if (customSince && customUntil) {
+      since = startOfDay(new Date(customSince))
+      until = endOfDay(new Date(customUntil))
+    } else {
+      switch (range) {
+        case 'yesterday': since = startOfDay(subDays(now,1)); until = endOfDay(subDays(now,1)); break
+        case '7days':     since = startOfDay(subDays(now,7)); until = endOfDay(now); break
+        case '30days':    since = startOfDay(subDays(now,30)); until = endOfDay(now); break
+        default:          since = startOfDay(now); until = endOfDay(now)
+      }
     }
 
     const token = await getLwaToken()
@@ -82,7 +91,7 @@ export async function GET(req: NextRequest) {
       ok: true,
       orders: { total: orders.length, revenue, ukOrders: ukOrders.length, ukRevenue: ukRev, euOrders: euOrders.length, euRevenue: euRev, hourly },
       returns: { cancelled: cancelled.length },
-      rating: { score: 98.2, reviews: orders.length } // SP-API rating requires Feedback API (extra OAuth scope)
+      rating: { score: parseFloat(process.env.AMAZON_SELLER_RATING || '0') || null, reviews: orders.length }
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })

@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { subDays, startOfDay, endOfDay } from 'date-fns'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const token = process.env.EBAY_TOKEN
   if (!token) return NextResponse.json({ ok: false, error: 'EBAY_TOKEN not set' }, { status: 500 })
 
   const { searchParams } = req.nextUrl
   const range = searchParams.get('range') || 'today'
+  const customSince = searchParams.get('since')
+  const customUntil = searchParams.get('until')
   const isSandbox = process.env.EBAY_ENV === 'sandbox'
   const base = isSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com'
 
@@ -18,20 +22,25 @@ export async function GET(req: NextRequest) {
 
   const now = new Date()
   let since: Date, until: Date
-  switch (range) {
-    case 'yesterday': since = startOfDay(subDays(now,1)); until = endOfDay(subDays(now,1)); break
-    case '7days':     since = startOfDay(subDays(now,7)); until = endOfDay(now); break
-    case '30days':    since = startOfDay(subDays(now,30)); until = endOfDay(now); break
-    default:          since = startOfDay(now); until = endOfDay(now)
+  if (customSince && customUntil) {
+    since = startOfDay(new Date(customSince))
+    until = endOfDay(new Date(customUntil))
+  } else {
+    switch (range) {
+      case 'yesterday': since = startOfDay(subDays(now,1)); until = endOfDay(subDays(now,1)); break
+      case '7days':     since = startOfDay(subDays(now,7)); until = endOfDay(now); break
+      case '30days':    since = startOfDay(subDays(now,30)); until = endOfDay(now); break
+      default:          since = startOfDay(now); until = endOfDay(now)
+    }
   }
 
   try {
     const [ordersRes, analyticsRes] = await Promise.all([
       fetch(
         `${base}/sell/fulfillment/v1/order?filter=creationdate:[${since.toISOString()}..${until.toISOString()}]&limit=200`,
-        { headers, next: { revalidate: 0 } }
+        { headers, cache: 'no-store' }
       ),
-      fetch(`${base}/sell/analytics/v1/seller_standards_profile`, { headers, next: { revalidate: 0 } })
+      fetch(`${base}/sell/analytics/v1/seller_standards_profile`, { headers, cache: 'no-store' })
     ])
 
     if (!ordersRes.ok) throw new Error(`eBay orders ${ordersRes.status}`)
@@ -40,9 +49,11 @@ export async function GET(req: NextRequest) {
 
     let revenue = 0
     let returns = 0
+    let cancelled = 0
     orders.forEach((o: any) => {
       revenue += parseFloat(o.pricingSummary?.total?.value || 0)
-      if (o.cancelStatus?.cancelState === 'CANCEL_REQUESTED' || o.orderFulfillmentStatus === 'NOT_STARTED') returns++
+      if (o.cancelStatus?.cancelState === 'CANCEL_REQUESTED') cancelled++
+      if (o.orderFulfillmentStatus === 'NOT_STARTED' && o.cancelStatus?.cancelState !== 'CANCEL_REQUESTED') returns++
     })
 
     const hourly: Record<number, number> = {}
@@ -63,7 +74,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       orders: { total: orders.length, revenue, hourly },
-      returns: { returns, cancelled: returns },
+      returns: { returns, cancelled },
       rating: { score: rating, reviews: orders.length }
     })
   } catch (err: any) {
