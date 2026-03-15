@@ -1,34 +1,78 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { subDays, startOfDay, endOfDay } from 'date-fns'
+import { subDays, startOfDay, endOfDay, differenceInDays } from 'date-fns'
 
 export const dynamic = 'force-dynamic'
 
 const VEEQO_BASE = 'https://api.veeqo.com'
 
-async function veeqoFetch(path: string) {
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+async function veeqoFetch(path: string, retries = 2): Promise<any> {
   const key = process.env.VEEQO_API_KEY
   if (!key) throw new Error('VEEQO_API_KEY not set')
-  const res = await fetch(`${VEEQO_BASE}${path}`, {
-    headers: { 'x-api-key': key },
-    cache: 'no-store'
-  })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Veeqo ${res.status}: ${body.slice(0, 200)}`)
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(`${VEEQO_BASE}${path}`, {
+      headers: { 'x-api-key': key },
+      cache: 'no-store'
+    })
+    if (res.status === 429) {
+      await delay(1000 * (attempt + 1))
+      continue
+    }
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`Veeqo ${res.status}: ${body.slice(0, 200)}`)
+    }
+    return res.json()
   }
-  return res.json()
+  throw new Error('Veeqo rate limited after retries')
 }
 
+// Fetch pages in batches of 3 to avoid rate limits
 async function veeqoFetchAll(basePath: string, maxPages = 20): Promise<any[]> {
   const sep = basePath.includes('?') ? '&' : '?'
   let all: any[] = []
-  for (let page = 1; page <= maxPages; page++) {
-    const data = await veeqoFetch(`${basePath}${sep}page_size=100&page=${page}`)
-    if (!Array.isArray(data) || data.length === 0) break
-    all = all.concat(data)
-    if (data.length < 100) break
+  const BATCH = 3
+  for (let start = 1; start <= maxPages; start += BATCH) {
+    const batch = []
+    for (let p = start; p < start + BATCH && p <= maxPages; p++) {
+      batch.push(
+        veeqoFetch(`${basePath}${sep}page_size=100&page=${p}`)
+          .then(d => (Array.isArray(d) ? d : []))
+      )
+    }
+    const results = await Promise.all(batch)
+    let done = false
+    for (const page of results) {
+      if (page.length === 0) { done = true; break }
+      all = all.concat(page)
+      if (page.length < 100) { done = true; break }
+    }
+    if (done) break
   }
   return all
+}
+
+// Cache products in memory (they don't change with date range)
+let productCache: { data: any[]; fetchedAt: number } | null = null
+const PRODUCT_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
+async function getProducts(): Promise<any[]> {
+  if (productCache && Date.now() - productCache.fetchedAt < PRODUCT_CACHE_TTL) {
+    return productCache.data
+  }
+  const products = await veeqoFetchAll('/products')
+  productCache = { data: products, fetchedAt: Date.now() }
+  return products
+}
+
+function computeOrderMetrics(orders: any[]) {
+  const total = orders.length
+  const revenue = orders.reduce((s: number, o: any) => s + parseFloat(o.total_price || 0), 0)
+  const shipped = orders.filter((o: any) =>
+    o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
+  ).length
+  return { total, revenue, shipped, pending: total - shipped }
 }
 
 export async function GET(req: NextRequest) {
@@ -64,21 +108,34 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Compute previous period for comparison
+    const periodDays = Math.max(1, differenceInDays(until, since) + 1)
+    const prevSince = startOfDay(subDays(since, periodDays))
+    const prevUntil = endOfDay(subDays(since, 1))
+
     const sinceISO = encodeURIComponent(since.toISOString())
     const untilISO = encodeURIComponent(until.toISOString())
+    const prevSinceISO = encodeURIComponent(prevSince.toISOString())
+    const prevUntilISO = encodeURIComponent(prevUntil.toISOString())
 
-    // Fetch all pages of orders, products, and pick lists in parallel
-    const [orders, products, pickLists] = await Promise.all([
+    // Fetch orders, previous orders, products (cached), and pick lists all in parallel
+    const [orders, prevOrders, products, pickLists] = await Promise.all([
       veeqoFetchAll(`/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`),
-      veeqoFetchAll(`/products`),
+      veeqoFetchAll(`/orders?created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`),
+      getProducts(),
       veeqoFetchAll(`/pick_lists?created_at_min=${sinceISO}`).catch(() => [])
     ])
 
-    // Orders metrics
-    const totalOrders = orders.length
-    const totalRevenue = orders.reduce((s: number, o: any) => s + parseFloat(o.total_price || 0), 0)
-    const shipped = orders.filter((o: any) =>
-      o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
+    // Current period metrics
+    const current = computeOrderMetrics(orders)
+    const prev = computeOrderMetrics(prevOrders)
+
+    // Ready to ship: non-FBA orders that haven't shipped yet (eBay, D2C, B2B)
+    const FBA_TYPES = new Set(['amazon_fba'])
+    const SHIPPED_STATUSES = new Set(['shipped'])
+    const EXCLUDED_STATUSES = new Set(['shipped', 'cancelled'])
+    const readyToShip = orders.filter((o: any) =>
+      !FBA_TYPES.has(o.channel?.type_code) && !EXCLUDED_STATUSES.has(o.status)
     ).length
 
     // Hourly breakdown (for sparkline)
@@ -113,17 +170,17 @@ export async function GET(req: NextRequest) {
         const name = s.product_title || s.title || sku
         const qty = li.quantity || 1
         const rev = parseFloat(li.price_per_unit || 0) * qty
-        // Overall
         if (!skuMap[sku]) skuMap[sku] = { name, sku, qty: 0, revenue: 0 }
         skuMap[sku].qty += qty
         skuMap[sku].revenue += rev
-        // By channel
         if (!skuByChannel[chName][sku]) skuByChannel[chName][sku] = { name, sku, qty: 0, revenue: 0 }
         skuByChannel[chName][sku].qty += qty
         skuByChannel[chName][sku].revenue += rev
       })
     })
     const topSkus = Object.values(skuMap).sort((a, b) => b.qty - a.qty).slice(0, 10)
+    const topSkusByRevenue = Object.values(skuMap).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
+    const totalUnitsSold = Object.values(skuMap).reduce((s, sk) => s + sk.qty, 0)
     const topSkusByChannel: Record<string, { name: string; sku: string; qty: number; revenue: number }[]> = {}
     for (const [ch, map] of Object.entries(skuByChannel)) {
       topSkusByChannel[ch] = Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 5)
@@ -140,16 +197,13 @@ export async function GET(req: NextRequest) {
         const costPrice = parseFloat(v.cost_price || 0) || 0
         const stockEntries = v.stock_entries || v.warehouses || []
 
-        // Aggregate stock across all warehouses for this variant
         let totalQty = 0
         stockEntries.forEach((se: any) => {
           const phys = se.physical_stock_level ?? 0
           totalQty += phys
-          // Warehouse value tracking
           const wh = se.warehouse || {}
           const whName = wh.name || `Warehouse ${wh.id || '?'}`
           if (!warehouseValueMap[whName]) warehouseValueMap[whName] = { name: whName, value: 0, units: 0 }
-          // Use sellable_on_hand_value if available, otherwise cost_price * qty
           const entryValue = (se.sellable_on_hand_value && se.sellable_on_hand_value > 0)
             ? se.sellable_on_hand_value
             : costPrice * phys
@@ -182,11 +236,14 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      orders: { total: totalOrders, shipped, pending: totalOrders - shipped, revenue: totalRevenue, hourly },
+      orders: { total: current.total, shipped: current.shipped, pending: current.pending, revenue: current.revenue, hourly, readyToShip },
+      prevOrders: { total: prev.total, revenue: prev.revenue },
       stock: { critical, low, healthy, total: totalSKUs, lowItems: lowStockItems.slice(0, 10) },
       shift: { picks, packs, lists: pickLists.length, errors: 0 },
       channels,
       topSkus,
+      topSkusByRevenue,
+      totalUnitsSold,
       topSkusByChannel,
       stockByWarehouse,
       totalStockValue
