@@ -1588,7 +1588,19 @@ export default function Dashboard() {
   }
 
   if (!mounted) {
-    return <div style={{ minHeight: '100vh', background: t.bg }} />
+    return (
+      <div style={{ minHeight: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: `linear-gradient(135deg, ${t.blue}, ${t.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+            <span style={{ fontSize: 20, fontWeight: 800, color: '#000' }}>O</span>
+          </div>
+          <svg width="24" height="24" viewBox="0 0 16 16" style={{ animation: 'spin 1s linear infinite' }}>
+            <circle cx="8" cy="8" r="6" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+            <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke={t.blue} strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </div>
+      </div>
+    )
   }
 
   return (
