@@ -29,7 +29,7 @@ async function veeqoFetch(path: string, retries = 2): Promise<any> {
 }
 
 // Fetch pages in batches of 3 to avoid rate limits
-async function veeqoFetchAll(basePath: string, maxPages = 20): Promise<any[]> {
+async function veeqoFetchAll(basePath: string, maxPages = 50): Promise<any[]> {
   const sep = basePath.includes('?') ? '&' : '?'
   let all: any[] = []
   const BATCH = 3

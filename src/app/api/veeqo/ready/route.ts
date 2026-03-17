@@ -40,23 +40,38 @@ async function fetchAllPages(basePath: string): Promise<any[]> {
 }
 
 const FBA_TYPES = new Set(['amazon_fba'])
+const EXCLUDED_TAGS = new Set(['on hold', 'pre order', 'pre-order', 'urgent'])
+const PRE_ORDER_TAGS = new Set(['pre order', 'pre-order'])
+
+function getOrderTags(o: any): string[] {
+  return (o.tags || []).map((tag: any) => (tag.name || '').toLowerCase())
+}
+
+function getOrderWarehouses(o: any): string[] {
+  return (o.allocations || []).map((a: any) => a.warehouse?.name || '').filter(Boolean)
+}
 
 export async function GET() {
   try {
-    // "Ready to Ship" in Veeqo = awaiting_fulfillment (allocated, ready to pick/pack)
     const orders = await fetchAllPages('/orders?status=awaiting_fulfillment')
 
-    const EXCLUDED_TAGS = new Set(['on hold', 'pre order', 'pre-order', 'urgent'])
-
-    // Filter out FBA orders and orders with excluded tags
+    // Ready to ship: non-FBA, Wirral Warehouse, no excluded tags
     const readyToShip = orders.filter((o: any) => {
       if (FBA_TYPES.has(o.channel?.type_code)) return false
-      const tags = (o.tags || []).map((tag: any) => (tag.name || '').toLowerCase())
-      if (tags.some((tag: string) => EXCLUDED_TAGS.has(tag))) return false
+      const tags = getOrderTags(o)
+      if (tags.some(tag => EXCLUDED_TAGS.has(tag))) return false
+      const warehouses = getOrderWarehouses(o)
+      if (!warehouses.some(w => w === 'Wirral Warehouse')) return false
       return true
     }).length
 
-    return NextResponse.json({ ok: true, readyToShip, total: orders.length })
+    // Pre-orders: tagged pre order/pre-order, awaiting_fulfillment status (already filtered)
+    const preOrders = orders.filter((o: any) => {
+      const tags = getOrderTags(o)
+      return tags.some(tag => PRE_ORDER_TAGS.has(tag))
+    }).length
+
+    return NextResponse.json({ ok: true, readyToShip, preOrders, total: orders.length })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
   }

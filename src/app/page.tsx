@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { Responsive, WidthProvider } from 'react-grid-layout'
+import Nav from './components/Nav'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -48,6 +49,8 @@ interface GoogleAdsData {
   account: { impressions: number; clicks: number; spend: number; conversions: number; convValue: number; ctr: number; avgCpc: number; costPerConv: number; roas: number }
   campaigns: GoogleAdsCampaign[]
 }
+interface ShipmentEvent { type: 'departure' | 'arrival'; summary: string; container: string; reference: string; date: string; daysAway: number; destination: string }
+interface ShippingData { events: ShipmentEvent[]; upcoming: ShipmentEvent[]; past: ShipmentEvent[]; nextArrival?: ShipmentEvent; total: number }
 interface CancellationChannel { name: string; count: number; value: number }
 interface CancellationsData { total: number; totalValue: number; channels: CancellationChannel[] }
 interface DailyPoint { date: string; label: string; orders: number; revenue: number; units: number }
@@ -90,6 +93,39 @@ const rawFmtRev = (n?: number) => n != null ? CUR + rawFmt(n) : '--'
 const pct = (a: number, b: number) => b ? ((a / b) * 100).toFixed(1) + '%' : '--'
 
 // Display-aware helpers — all widgets should use these
+// ─── Order Ding Sound ─────────────────────────────────────────────────────────
+function playDing() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    // First tone
+    const osc1 = ctx.createOscillator()
+    const gain1 = ctx.createGain()
+    osc1.type = 'sine'
+    osc1.frequency.setValueAtTime(880, ctx.currentTime) // A5
+    gain1.gain.setValueAtTime(0.3, ctx.currentTime)
+    gain1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4)
+    osc1.connect(gain1)
+    gain1.connect(ctx.destination)
+    osc1.start(ctx.currentTime)
+    osc1.stop(ctx.currentTime + 0.4)
+
+    // Second tone (higher, slight delay for a chime effect)
+    const osc2 = ctx.createOscillator()
+    const gain2 = ctx.createGain()
+    osc2.type = 'sine'
+    osc2.frequency.setValueAtTime(1318.5, ctx.currentTime + 0.08) // E6
+    gain2.gain.setValueAtTime(0, ctx.currentTime)
+    gain2.gain.setValueAtTime(0.2, ctx.currentTime + 0.08)
+    gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5)
+    osc2.connect(gain2)
+    gain2.connect(ctx.destination)
+    osc2.start(ctx.currentTime + 0.08)
+    osc2.stop(ctx.currentTime + 0.5)
+
+    setTimeout(() => ctx.close(), 600)
+  } catch {}
+}
+
 function useDisplayFmt() {
   const { hideValues, multiplier } = useDisplay()
   const m = (n?: number) => n != null ? n * multiplier : undefined
@@ -206,7 +242,8 @@ function ProgressBar({ pct: p, colour }: { pct: number; colour: string }) {
 function Sparkline({ hourly }: { hourly: Record<number, number> }) {
   const hours = Array.from({ length: 10 }, (_, i) => hourly[i + 8] || 0)
   const max = Math.max(...hours, 1)
-  const currentHour = new Date().getHours()
+  const [currentHour, setCurrentHour] = useState(-1)
+  useEffect(() => { setCurrentHour(new Date().getHours()) }, [])
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 40 }}>
       {hours.map((v, i) => {
@@ -247,20 +284,37 @@ function VeeqoOrdersWidget({ data, loading, range }: { data?: VeeqoData; loading
       {showShimmer ? (
         <><div className="shimmer" style={{ height: 30, width: '50%', marginBottom: 14 }} /><div className="shimmer" style={{ height: 24, width: '35%' }} /></>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <div>
-            <MetricBlock label="Orders" value={fmt(data?.orders.total)} sub={<>{fmt(data?.orders.shipped)} shipped</>} />
-            <div style={{ marginTop: 8 }}>
-              <ChangeIndicator current={m(data?.orders.total)} previous={m(data?.prevOrders?.total)} prefix={prevLabel} />
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <MetricBlock label="Orders" value={fmt(data?.orders.total)} sub={<>{fmt(data?.orders.shipped)} shipped</>} />
+              <div style={{ marginTop: 8 }}>
+                <ChangeIndicator current={m(data?.orders.total)} previous={m(data?.prevOrders?.total)} prefix={prevLabel} />
+              </div>
+            </div>
+            <div>
+              <MetricBlock label="Revenue" value={fmtRev(data?.orders.revenue)} sub={<>{fmt(data?.orders.pending)} pending</>} subColour={t.orange} />
+              <div style={{ marginTop: 8 }}>
+                <ChangeIndicator current={m(data?.orders.revenue)} previous={m(data?.prevOrders?.revenue)} prefix={prevLabel} isMoney />
+              </div>
             </div>
           </div>
-          <div>
-            <MetricBlock label="Revenue" value={fmtRev(data?.orders.revenue)} sub={<>{fmt(data?.orders.pending)} pending</>} subColour={t.orange} />
-            <div style={{ marginTop: 8 }}>
-              <ChangeIndicator current={m(data?.orders.revenue)} previous={m(data?.prevOrders?.revenue)} prefix={prevLabel} isMoney />
-            </div>
-          </div>
-        </div>
+          {data?.prevOrders && (
+            <>
+              <Divider />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: t.text3, marginBottom: 4 }}>Previous — {prevLabel}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: t.text2, letterSpacing: '-0.02em' }}>{fmt(data.prevOrders.total)} <span style={{ fontSize: 12, fontWeight: 400, color: t.text3 }}>orders</span></div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: t.text3, marginBottom: 4 }}>Previous — {prevLabel}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: t.text2, letterSpacing: '-0.02em' }}>{fmtRev(data.prevOrders.revenue)}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </>
       )}
     </Card>
   )
@@ -270,19 +324,108 @@ function ReadyToShipWidget({ count, loading }: { count?: number; loading: boolea
   const showShimmer = loading && count == null
   const { fmt } = useDisplayFmt()
   const qty = count ?? 0
+  const [now, setNow] = useState<Date | null>(null)
+
+  // Tick every second for the countdown (only on client)
+  useEffect(() => {
+    setNow(new Date())
+    const timer = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // Calculate countdown to next 3pm cutoff
+  const clockReady = now !== null
+  const currentTime = now ?? new Date()
+  const todayCutoff = new Date(currentTime)
+  todayCutoff.setHours(15, 0, 0, 0)
+  const todayPast = currentTime.getTime() > todayCutoff.getTime()
+
+  // If past today's 3pm, count down to tomorrow's 3pm
+  const nextCutoff = todayPast ? new Date(todayCutoff.getTime() + 24 * 60 * 60 * 1000) : todayCutoff
+  const diff = nextCutoff.getTime() - currentTime.getTime()
+  const isPast = todayPast
+  const isUrgent = !isPast && diff < 60 * 60 * 1000
+  const isWarning = !isPast && diff < 2 * 60 * 60 * 1000
+
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+  const secs = Math.floor((diff % (1000 * 60)) / 1000)
+  const countdown = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+
+  // Determine tile accent colour
+  const hasOrders = qty > 0
+  const accentColour = isPast && hasOrders ? t.red : isUrgent && hasOrders ? t.red : isWarning && hasOrders ? t.orange : hasOrders ? t.green : t.text3
+
+  // Tile background tints (RGBA)
+  const tileBg = isPast && hasOrders ? 'rgba(255,69,58,0.1)' : isUrgent && hasOrders ? 'rgba(255,69,58,0.08)' : isWarning && hasOrders ? 'rgba(255,159,10,0.07)' : hasOrders ? 'rgba(48,209,88,0.07)' : 'transparent'
+  const borderColour = isPast && hasOrders ? 'rgba(255,69,58,0.3)' : isUrgent && hasOrders ? 'rgba(255,69,58,0.2)' : isWarning && hasOrders ? 'rgba(255,159,10,0.2)' : hasOrders ? 'rgba(48,209,88,0.15)' : t.cardBorder
+
   return (
     <Card tileId="ready-to-ship">
-      <SourceTag label="Fulfilment" colour={t.teal} />
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: t.radius,
+        background: tileBg,
+        border: `1.5px solid ${borderColour}`,
+        pointerEvents: 'none', transition: 'all 0.5s ease',
+      }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+        <SourceTag label="Fulfilment" colour={accentColour} />
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 10, color: t.text3, fontWeight: 500, letterSpacing: '0.02em' }}>
+            {isPast ? 'Next cutoff tomorrow' : 'Ship by 3:00 PM'}
+          </div>
+          <div style={{
+            fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1,
+            color: isPast && hasOrders ? t.red : isUrgent && hasOrders ? t.red : isWarning && hasOrders ? t.orange : t.text2,
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {clockReady ? countdown : '--:--:--'}
+          </div>
+        </div>
+      </div>
       <SectionTitle>Ready to Ship</SectionTitle>
       {showShimmer ? (
         <div className="shimmer" style={{ height: 50 }} />
       ) : (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <div style={{ fontSize: 48, fontWeight: 700, color: qty > 0 ? t.text1 : t.text3, lineHeight: 1, letterSpacing: '-0.03em' }}>{fmt(qty)}</div>
+          <div style={{
+            fontSize: 48, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.03em',
+            color: hasOrders ? accentColour : t.text3,
+            transition: 'color 0.5s ease',
+          }}>{fmt(qty)}</div>
           <div style={{ fontSize: 13, color: t.text2 }}>orders</div>
         </div>
       )}
-      <div style={{ fontSize: 12, color: t.text3, marginTop: 10 }}>eBay, D2C & B2B — excludes FBA</div>
+      <div style={{ fontSize: 12, color: t.text3, marginTop: 10 }}>Wirral Warehouse — excludes FBA</div>
+      {isPast && hasOrders && (
+        <div style={{ fontSize: 12, fontWeight: 600, color: t.red, marginTop: 8 }}>
+          Today&apos;s cutoff passed — {qty} orders still pending
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function PreOrdersWidget({ count, loading }: { count?: number; loading: boolean }) {
+  const showShimmer = loading && count == null
+  const { fmt } = useDisplayFmt()
+  const qty = count ?? 0
+  return (
+    <Card tileId="pre-orders">
+      <SourceTag label="Pre-Orders" colour={t.purple} />
+      <SectionTitle>Awaiting Fulfilment</SectionTitle>
+      {showShimmer ? (
+        <div className="shimmer" style={{ height: 50 }} />
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={{
+            fontSize: 48, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.03em',
+            color: qty > 0 ? t.purple : t.text3,
+          }}>{fmt(qty)}</div>
+          <div style={{ fontSize: 13, color: t.text2 }}>orders</div>
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: t.text3, marginTop: 10 }}>Tagged pre-order with status ready to ship</div>
     </Card>
   )
 }
@@ -910,6 +1053,94 @@ function GoogleAdsWidget({ data, loading }: { data?: GoogleAdsData; loading: boo
   )
 }
 
+function ShippingWidget({ data, loading }: { data?: ShippingData; loading: boolean }) {
+  const showShimmer = loading && !data
+  const upcoming = data?.upcoming || []
+  const past = data?.past || []
+  const nextArrival = data?.nextArrival
+
+  const formatDate = (d: string) => {
+    const date = new Date(d)
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  }
+
+  const daysLabel = (days: number) => {
+    if (days === 0) return 'Today'
+    if (days === 1) return 'Tomorrow'
+    if (days < 0) return `${Math.abs(days)}d ago`
+    return `${days}d`
+  }
+
+  const daysColour = (days: number, type: string) => {
+    if (days < 0) return t.text3
+    if (type === 'arrival') {
+      if (days <= 3) return t.green
+      if (days <= 7) return t.teal
+      return t.text2
+    }
+    return t.text2
+  }
+
+  return (
+    <Card tileId="shipping">
+      <SourceTag label="Leda Shipping" colour={t.teal} />
+      <SectionTitle>Container Tracking</SectionTitle>
+      {showShimmer ? (
+        <div className="shimmer" style={{ height: 80 }} />
+      ) : !data?.events.length ? (
+        <div style={{ fontSize: 13, color: t.text3 }}>No shipments found</div>
+      ) : (
+        <>
+          {nextArrival && (
+            <div style={{
+              background: `${t.green}10`, border: `1px solid ${t.green}25`,
+              borderRadius: t.radiusSm, padding: '12px 14px', marginBottom: 14
+            }}>
+              <div style={{ fontSize: 11, color: t.green, fontWeight: 600, marginBottom: 4 }}>Next Arrival</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: t.text1, letterSpacing: '-0.02em' }}>
+                {formatDate(nextArrival.date)} <span style={{ fontSize: 13, fontWeight: 500, color: t.green }}>({daysLabel(nextArrival.daysAway)})</span>
+              </div>
+              <div style={{ fontSize: 12, color: t.text2, marginTop: 4 }}>
+                {nextArrival.container ? nextArrival.container : 'Container TBC'} — {nextArrival.reference}
+              </div>
+            </div>
+          )}
+          {upcoming.map((e, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: `1px solid ${t.separator}` }}>
+              <div style={{
+                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                background: e.type === 'arrival' ? t.green : t.blue
+              }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: t.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {e.type === 'arrival' ? 'Arriving' : 'Departing'} — {e.container || 'TBC'}{e.reference ? ` (${e.reference})` : ''}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: daysColour(e.daysAway, e.type) }}>{daysLabel(e.daysAway)}</div>
+                <div style={{ fontSize: 10, color: t.text3 }}>{formatDate(e.date)}</div>
+              </div>
+            </div>
+          ))}
+          {past.length > 0 && (
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ fontSize: 12, color: t.text3, cursor: 'pointer', fontWeight: 500 }}>{past.length} past shipment{past.length !== 1 ? 's' : ''}</summary>
+              <div style={{ marginTop: 6 }}>
+                {past.map((e, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: t.text3, padding: '5px 0', borderBottom: `1px solid ${t.separator}` }}>
+                    <span>{e.type === 'arrival' ? 'Arrived' : 'Departed'} — {e.container || 'TBC'}</span>
+                    <span>{formatDate(e.date)}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
 function CancellationsWidget({ data, loading }: { data?: CancellationsData; loading: boolean }) {
   const { fmt, fmtRev } = useDisplayFmt()
   const showShimmer = loading && !data
@@ -965,7 +1196,7 @@ function HistoryChartWidget({ data, loading }: { data?: HistoryData; loading: bo
   const { fmt, fmtRev, hideValues } = useDisplayFmt()
   const showShimmer = loading && !data
   const daily = data?.daily || []
-  const [showRevNum, setShowRevNum] = useState(true)
+  const [showRevNum, setShowRevNum] = useState(false)
   const revNumVisible = showRevNum && !hideValues
 
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -1004,7 +1235,7 @@ function HistoryChartWidget({ data, loading }: { data?: HistoryData; loading: bo
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
         <SourceTag label="Veeqo" colour={sourceColours.veeqo} />
         {data && (
-          <div style={{ display: 'flex', gap: 20, alignItems: 'center', textAlign: 'right' }}>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'center', textAlign: 'right', marginRight: 28 }}>
             <div>
               <div style={{ fontSize: 11, color: t.text3 }}>30d Orders</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: t.text1, letterSpacing: '-0.02em' }}>{fmt(data.totalOrders)}</div>
@@ -1135,11 +1366,12 @@ function HistoryChartWidget({ data, loading }: { data?: HistoryData; loading: bo
 // ─── Default layouts ──────────────────────────────────────────────────────────
 const defaultLayouts: Layouts = {
   lg: [
-    { i: 'veeqo-orders',       x: 0, y: 0,  w: 4, h: 5 },
+    { i: 'veeqo-orders',       x: 0, y: 0,  w: 4, h: 7 },
     { i: 'ready-to-ship',      x: 4, y: 0,  w: 2, h: 5 },
+    { i: 'pre-orders',         x: 4, y: 5,  w: 2, h: 4 },
     { i: 'veeqo-channels',     x: 6, y: 0,  w: 3, h: 6 },
     { i: 'veeqo-orders-by-ch', x: 9, y: 0,  w: 3, h: 6 },
-    { i: 'history-chart',       x: 0, y: 5,  w: 12, h: 7 },
+    { i: 'history-chart',       x: 0, y: 5,  w: 12, h: 9 },
     { i: 'veeqo-shift',        x: 0, y: 12, w: 4, h: 7 },
     { i: 'units-sold',          x: 4, y: 12, w: 2, h: 7 },
     { i: 'veeqo-top-skus',     x: 6, y: 12, w: 3, h: 7 },
@@ -1147,25 +1379,31 @@ const defaultLayouts: Layouts = {
     { i: 'veeqo-skus-by-ch',   x: 0, y: 19, w: 4, h: 7 },
     { i: 'veeqo-stock',        x: 4, y: 19, w: 4, h: 7 },
     { i: 'veeqo-stock-value',  x: 8, y: 19, w: 4, h: 8 },
-    { i: 'google-ads',          x: 0, y: 26, w: 6, h: 9 },
-    { i: 'cancellations',      x: 6, y: 26, w: 3, h: 7 },
-    { i: 'amazon',             x: 9, y: 26, w: 3, h: 7 },
+    { i: 'shipping',            x: 0, y: 26, w: 3, h: 8 },
+    { i: 'google-ads',          x: 3, y: 26, w: 6, h: 9 },
+    { i: 'cancellations',      x: 9, y: 26, w: 3, h: 7 },
+    { i: 'amazon',             x: 0, y: 35, w: 4, h: 7 },
     { i: 'ebay',               x: 0, y: 35, w: 4, h: 5 },
     { i: 'returns',            x: 4, y: 35, w: 4, h: 5 },
     { i: 'sheets',             x: 8, y: 35, w: 4, h: 5 },
   ]
 }
-const LAYOUT_KEY = 'opscore_layouts_v10'
+const LAYOUT_KEY = 'opscore_layout'
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [range, setRange] = useState<DateRange>('today')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
-  const [layouts, setLayouts] = useState<Layouts>(() => {
-    if (typeof window === 'undefined') return defaultLayouts
-    try { return JSON.parse(localStorage.getItem(LAYOUT_KEY) || '') } catch { return defaultLayouts }
-  })
+  const [layouts, setLayouts] = useState<Layouts>(defaultLayouts)
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+    try {
+      const saved = localStorage.getItem(LAYOUT_KEY)
+      if (saved) setLayouts(JSON.parse(saved))
+    } catch {}
+  }, [])
 
   const [veeqoData, setVeeqoData]   = useState<VeeqoData>()
   const [amazonData, setAmazonData] = useState<AmazonData>()
@@ -1174,11 +1412,14 @@ export default function Dashboard() {
   const [historyData, setHistoryData] = useState<HistoryData>()
   const [historyLoading, setHistoryLoading] = useState(false)
   const [readyToShip, setReadyToShip] = useState<number | undefined>()
+  const [preOrders, setPreOrders] = useState<number | undefined>()
   const [readyLoading, setReadyLoading] = useState(false)
   const [cancellations, setCancellations] = useState<CancellationsData>()
   const [cancellationsLoading, setCancellationsLoading] = useState(false)
   const [googleAdsData, setGoogleAdsData] = useState<GoogleAdsData>()
   const [googleAdsLoading, setGoogleAdsLoading] = useState(false)
+  const [shippingData, setShippingData] = useState<ShippingData>()
+  const [shippingLoading, setShippingLoading] = useState(false)
 
   const [statuses, setStatuses] = useState<Record<string, ApiStatus>>({
     veeqo: 'idle', amazon: 'idle', ebay: 'idle', sheets: 'idle'
@@ -1186,12 +1427,17 @@ export default function Dashboard() {
   const [lastRefresh, setLastRefresh] = useState<string>('never')
   const [fetchKey, setFetchKey] = useState(0)
   const [hideValues, setHideValues] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const mutedRef = useRef(false)
   const [hoaxMode, setHoaxMode] = useState(false)
   const multiplier = hoaxMode ? 3 : 1
-  const [hiddenTiles, setHiddenTiles] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set()
-    try { return new Set(JSON.parse(localStorage.getItem('opscore_hidden_tiles') || '[]')) } catch { return new Set() }
-  })
+  const [hiddenTiles, setHiddenTiles] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('opscore_hidden_tiles')
+      if (saved) setHiddenTiles(new Set(JSON.parse(saved)))
+    } catch {}
+  }, [])
   const toggleTile = (id: string) => {
     setHiddenTiles(prev => {
       const next = new Set(prev)
@@ -1201,6 +1447,7 @@ export default function Dashboard() {
     })
   }
   const fetchAllRef = useRef<() => void>(() => {})
+  const prevOrderCount = useRef<number | null>(null)
 
   const setStatus = (key: string, s: ApiStatus) =>
     setStatuses(prev => ({ ...prev, [key]: s }))
@@ -1216,7 +1463,17 @@ export default function Dashboard() {
       setStatus('veeqo', 'loading')
       fetch(`/api/veeqo?${qs}`)
         .then(res => res.json())
-        .then(d => { if (d.ok) { setVeeqoData(d); setStatus('veeqo', 'ok') } else { setStatus('veeqo', 'error'); console.error('Veeqo:', d.error) } })
+        .then(d => {
+          if (d.ok) {
+            const newCount = d.orders?.total ?? 0
+            if (prevOrderCount.current !== null && newCount > prevOrderCount.current && !mutedRef.current) {
+              playDing()
+            }
+            prevOrderCount.current = newCount
+            setVeeqoData(d)
+            setStatus('veeqo', 'ok')
+          } else { setStatus('veeqo', 'error'); console.error('Veeqo:', d.error) }
+        })
         .catch(() => setStatus('veeqo', 'error'))
 
       setStatus('amazon', 'loading')
@@ -1237,6 +1494,13 @@ export default function Dashboard() {
         .then(d => { if (d.ok) { setSheetsData(d); setStatus('sheets', 'ok') } else { setStatus('sheets', 'error'); console.error('Sheets:', d.error) } })
         .catch(() => setStatus('sheets', 'error'))
 
+      // Shipping containers
+      setShippingLoading(true)
+      fetch('/api/shipping')
+        .then(res => res.json())
+        .then(d => { if (d.ok) setShippingData(d); setShippingLoading(false) })
+        .catch(() => setShippingLoading(false))
+
       // Google Ads
       setGoogleAdsLoading(true)
       fetch(`/api/google-ads?${qs}`)
@@ -1255,7 +1519,7 @@ export default function Dashboard() {
       setReadyLoading(true)
       fetch('/api/veeqo/ready')
         .then(res => res.json())
-        .then(d => { if (d.ok) setReadyToShip(d.readyToShip); setReadyLoading(false) })
+        .then(d => { if (d.ok) { setReadyToShip(d.readyToShip); setPreOrders(d.preOrders) } setReadyLoading(false) })
         .catch(() => setReadyLoading(false))
 
       // 30-day history (cached server-side, always fetched)
@@ -1301,11 +1565,16 @@ export default function Dashboard() {
     fontFamily: 'inherit', outline: 'none', transition: 'border-color 0.2s'
   }
 
+  if (!mounted) {
+    return <div style={{ minHeight: '100vh', background: t.bg }} />
+  }
+
   return (
     <div style={{ minHeight: '100vh', background: t.bg, padding: '24px 28px' }}>
       {/* Top bar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${t.separator}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Nav />
           <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg, ${t.blue}, ${t.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: '#000' }}>O</span>
           </div>
@@ -1317,14 +1586,22 @@ export default function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
 
           {/* Preset pills */}
-          <div style={{ display: 'flex', gap: 4, background: 'rgba(255,255,255,0.04)', borderRadius: 22, padding: 3 }}>
-            {(Object.keys(presetLabels) as DateRange[]).map(r => (
-              <button key={r} onClick={() => handleRangeChange(r)} style={{
-                ...pillBase,
-                background: range === r ? 'rgba(255,255,255,0.12)' : 'transparent',
-                color: range === r ? t.text1 : t.text2,
-              }}>{presetLabels[r]}</button>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 4, background: 'rgba(255,255,255,0.04)', borderRadius: 22, padding: 3 }}>
+              {(Object.keys(presetLabels) as DateRange[]).map(r => (
+                <button key={r} onClick={() => handleRangeChange(r)} style={{
+                  ...pillBase,
+                  background: range === r ? 'rgba(255,255,255,0.12)' : 'transparent',
+                  color: range === r ? t.text1 : t.text2,
+                }}>{presetLabels[r]}</button>
+              ))}
+            </div>
+            {Object.values(statuses).some(s => s === 'loading') && (
+              <svg width="16" height="16" viewBox="0 0 16 16" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}>
+                <circle cx="8" cy="8" r="6" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+                <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke={t.blue} strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            )}
           </div>
 
           {/* Custom date range */}
@@ -1349,6 +1626,29 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
+
+          {/* Sound controls */}
+          <button onClick={() => { setMuted(v => { mutedRef.current = !v; return !v }) }} style={{
+            ...pillBase, background: muted ? 'rgba(255,69,58,0.15)' : 'rgba(255,255,255,0.06)',
+            color: muted ? t.red : t.text2, display: 'flex', alignItems: 'center', gap: 6
+          }} title={muted ? 'Unmute' : 'Mute'}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {muted ? (
+                <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></>
+              ) : (
+                <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /></>
+              )}
+            </svg>
+          </button>
+          <button onClick={() => playDing()} style={{
+            ...pillBase, background: 'rgba(255,255,255,0.06)', color: t.text3,
+            display: 'flex', alignItems: 'center'
+          }} title="Test ding sound">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+          </button>
 
           {/* Master eye toggle */}
           <button onClick={() => setHideValues(v => !v)} style={{
@@ -1396,6 +1696,8 @@ export default function Dashboard() {
         rowHeight={40}
         draggableHandle=".drag-handle"
         margin={[12, 12]}
+        compactType="vertical"
+        preventCollision={false}
       >
         <div key="veeqo-orders">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
@@ -1404,6 +1706,10 @@ export default function Dashboard() {
         <div key="ready-to-ship">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
           <ReadyToShipWidget count={readyToShip} loading={readyLoading} />
+        </div>
+        <div key="pre-orders">
+          <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
+          <PreOrdersWidget count={preOrders} loading={readyLoading} />
         </div>
         <div key="veeqo-channels">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
@@ -1448,6 +1754,10 @@ export default function Dashboard() {
         <div key="amazon">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
           <AmazonWidget data={amazonData} loading={isLoading('amazon')} />
+        </div>
+        <div key="shipping">
+          <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
+          <ShippingWidget data={shippingData} loading={shippingLoading} />
         </div>
         <div key="google-ads">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
