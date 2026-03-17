@@ -1386,6 +1386,28 @@ const defaultLayouts: Layouts = {
     { i: 'ebay',               x: 0, y: 35, w: 4, h: 5 },
     { i: 'returns',            x: 4, y: 35, w: 4, h: 5 },
     { i: 'sheets',             x: 8, y: 35, w: 4, h: 5 },
+  ],
+  xs: [
+    { i: 'veeqo-orders',       x: 0, y: 0,  w: 1, h: 7 },
+    { i: 'ready-to-ship',      x: 0, y: 7,  w: 1, h: 5 },
+    { i: 'pre-orders',         x: 0, y: 12, w: 1, h: 4 },
+    { i: 'history-chart',      x: 0, y: 16, w: 1, h: 9 },
+    { i: 'veeqo-channels',     x: 0, y: 25, w: 1, h: 7 },
+    { i: 'veeqo-orders-by-ch', x: 0, y: 32, w: 1, h: 7 },
+    { i: 'units-sold',         x: 0, y: 39, w: 1, h: 5 },
+    { i: 'veeqo-top-skus',     x: 0, y: 44, w: 1, h: 8 },
+    { i: 'veeqo-top-skus-rev', x: 0, y: 52, w: 1, h: 8 },
+    { i: 'veeqo-shift',        x: 0, y: 60, w: 1, h: 7 },
+    { i: 'veeqo-skus-by-ch',   x: 0, y: 67, w: 1, h: 8 },
+    { i: 'veeqo-stock',        x: 0, y: 75, w: 1, h: 8 },
+    { i: 'veeqo-stock-value',  x: 0, y: 83, w: 1, h: 8 },
+    { i: 'shipping',           x: 0, y: 91, w: 1, h: 8 },
+    { i: 'cancellations',      x: 0, y: 99, w: 1, h: 7 },
+    { i: 'google-ads',         x: 0, y: 106, w: 1, h: 10 },
+    { i: 'amazon',             x: 0, y: 116, w: 1, h: 7 },
+    { i: 'ebay',               x: 0, y: 123, w: 1, h: 6 },
+    { i: 'returns',            x: 0, y: 129, w: 1, h: 6 },
+    { i: 'sheets',             x: 0, y: 135, w: 1, h: 6 },
   ]
 }
 const LAYOUT_KEY = 'opscore_layout'
@@ -1570,20 +1592,20 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: t.bg, padding: '24px 28px' }}>
+    <div style={{ minHeight: '100vh', background: t.bg, padding: '16px clamp(12px, 3vw, 28px)' }}>
       {/* Top bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${t.separator}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${t.separator}`, flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Nav />
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg, ${t.blue}, ${t.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg, ${t.blue}, ${t.teal})`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: '#000' }}>O</span>
           </div>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: t.text1, letterSpacing: '-0.02em' }}>OpsCore</div>
-            <div style={{ fontSize: 11, color: t.text3, fontWeight: 400 }}>Command Centre</div>
+            <div className="hide-on-mobile" style={{ fontSize: 11, color: t.text3, fontWeight: 400 }}>Command Centre</div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
 
           {/* Preset pills */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1605,7 +1627,7 @@ export default function Dashboard() {
           </div>
 
           {/* Custom date range */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div className="hide-on-mobile" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={inputStyle} />
             <span style={{ fontSize: 12, color: t.text3 }}>to</span>
             <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)} style={inputStyle} />
@@ -1618,7 +1640,7 @@ export default function Dashboard() {
           </div>
 
           {/* Status dots */}
-          <div style={{ display: 'flex', gap: 14, padding: '0 4px' }}>
+          <div className="hide-on-mobile" style={{ display: 'flex', gap: 14, padding: '0 4px' }}>
             {(['veeqo','amazon','ebay','sheets'] as const).map(k => (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: t.text2 }}>
                 <StatusDot status={statuses[k]} />
@@ -1691,8 +1713,8 @@ export default function Dashboard() {
         className="layout"
         layouts={layouts}
         onLayoutChange={handleLayoutChange}
-        breakpoints={{ lg: 1200, md: 996, sm: 768 }}
-        cols={{ lg: 12, md: 8, sm: 4 }}
+        breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 0 }}
+        cols={{ lg: 12, md: 8, sm: 4, xs: 1 }}
         rowHeight={40}
         draggableHandle=".drag-handle"
         margin={[12, 12]}

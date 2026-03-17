@@ -226,7 +226,7 @@ export default function UnlistedPage() {
         background: t.bg,
         fontFamily: font,
         color: t.text1,
-        padding: '32px 28px 60px',
+        padding: '24px clamp(12px, 3vw, 28px) 60px',
       }}
     >
       {/* Header */}
@@ -352,7 +352,7 @@ export default function UnlistedPage() {
           background: t.card,
           border: `1px solid ${t.cardBorder}`,
           borderRadius: t.radius,
-          overflow: 'hidden',
+          overflowX: 'auto',
           backdropFilter: 'blur(40px)',
           WebkitBackdropFilter: 'blur(40px)',
         }}
@@ -360,6 +360,7 @@ export default function UnlistedPage() {
         <table
           style={{
             width: '100%',
+            minWidth: 600,
             borderCollapse: 'collapse',
             fontSize: 13,
           }}
