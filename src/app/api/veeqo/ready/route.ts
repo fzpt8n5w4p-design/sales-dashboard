@@ -53,7 +53,18 @@ function getOrderWarehouses(o: any): string[] {
 
 export async function GET() {
   try {
-    const orders = await fetchAllPages('/orders?status=awaiting_fulfillment')
+    const now = new Date()
+    const yesterdayStart = new Date(now)
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+    yesterdayStart.setHours(0, 0, 0, 0)
+    const yesterdayEnd = new Date(now)
+    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
+    yesterdayEnd.setHours(23, 59, 59, 999)
+
+    const [orders, shippedOrders] = await Promise.all([
+      fetchAllPages('/orders?status=awaiting_fulfillment'),
+      fetchAllPages(`/orders?status=shipped&since=${yesterdayStart.toISOString()}&until=${yesterdayEnd.toISOString()}`),
+    ])
 
     // Ready to ship: non-FBA, Wirral Warehouse, no excluded tags
     const readyToShip = orders.filter((o: any) => {
@@ -71,7 +82,14 @@ export async function GET() {
       return tags.some(tag => PRE_ORDER_TAGS.has(tag))
     }).length
 
-    return NextResponse.json({ ok: true, readyToShip, preOrders, total: orders.length })
+    // Shipped yesterday from Wirral Warehouse (non-FBA)
+    const shippedYesterday = shippedOrders.filter((o: any) => {
+      if (FBA_TYPES.has(o.channel?.type_code)) return false
+      const warehouses = getOrderWarehouses(o)
+      return warehouses.some(w => w === 'Wirral Warehouse')
+    }).length
+
+    return NextResponse.json({ ok: true, readyToShip, preOrders, shippedYesterday, total: orders.length })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
   }

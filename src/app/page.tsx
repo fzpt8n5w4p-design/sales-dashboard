@@ -320,7 +320,7 @@ function VeeqoOrdersWidget({ data, loading, range }: { data?: VeeqoData; loading
   )
 }
 
-function ReadyToShipWidget({ count, loading }: { count?: number; loading: boolean }) {
+function ReadyToShipWidget({ count, shippedYesterday, loading }: { count?: number; shippedYesterday?: number; loading: boolean }) {
   const showShimmer = loading && count == null
   const { fmt } = useDisplayFmt()
   const qty = count ?? 0
@@ -397,6 +397,11 @@ function ReadyToShipWidget({ count, loading }: { count?: number; loading: boolea
         </div>
       )}
       <div style={{ fontSize: 12, color: t.text3, marginTop: 10 }}>Wirral Warehouse — excludes FBA</div>
+      {!showShimmer && shippedYesterday != null && (
+        <div style={{ fontSize: 13, color: t.text2, marginTop: 8 }}>
+          <span style={{ fontWeight: 600, color: t.text1 }}>{fmt(shippedYesterday)}</span> shipped yesterday
+        </div>
+      )}
       {isPast && hasOrders && (
         <div style={{ fontSize: 12, fontWeight: 600, color: t.red, marginTop: 8 }}>
           Today&apos;s cutoff passed — {qty} orders still pending
@@ -1434,6 +1439,7 @@ export default function Dashboard() {
   const [historyData, setHistoryData] = useState<HistoryData>()
   const [historyLoading, setHistoryLoading] = useState(false)
   const [readyToShip, setReadyToShip] = useState<number | undefined>()
+  const [shippedYesterday, setShippedYesterday] = useState<number | undefined>()
   const [preOrders, setPreOrders] = useState<number | undefined>()
   const [readyLoading, setReadyLoading] = useState(false)
   const [cancellations, setCancellations] = useState<CancellationsData>()
@@ -1541,7 +1547,7 @@ export default function Dashboard() {
       setReadyLoading(true)
       fetch('/api/veeqo/ready')
         .then(res => res.json())
-        .then(d => { if (d.ok) { setReadyToShip(d.readyToShip); setPreOrders(d.preOrders) } setReadyLoading(false) })
+        .then(d => { if (d.ok) { setReadyToShip(d.readyToShip); setShippedYesterday(d.shippedYesterday); setPreOrders(d.preOrders) } setReadyLoading(false) })
         .catch(() => setReadyLoading(false))
 
       // 30-day history (cached server-side, always fetched)
@@ -1739,7 +1745,7 @@ export default function Dashboard() {
         </div>
         <div key="ready-to-ship">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <ReadyToShipWidget count={readyToShip} loading={readyLoading} />
+          <ReadyToShipWidget count={readyToShip} shippedYesterday={shippedYesterday} loading={readyLoading} />
         </div>
         <div key="pre-orders">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
