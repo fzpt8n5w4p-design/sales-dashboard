@@ -6,12 +6,11 @@ export function getShopifyBase() {
   return `https://${store}/admin/api/2024-01`
 }
 
-export async function shopifyFetch(path: string, retries = 2): Promise<any> {
+async function shopifyRawFetch(url: string, retries = 2): Promise<Response> {
   const token = process.env.SHOPIFY_B2B_TOKEN
   if (!token) throw new Error('SHOPIFY_B2B_TOKEN not set')
-  const base = getShopifyBase()
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(`${base}${path}`, {
+    const res = await fetch(url, {
       headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
       cache: 'no-store',
     })
@@ -24,39 +23,51 @@ export async function shopifyFetch(path: string, retries = 2): Promise<any> {
       const body = await res.text()
       throw new Error(`Shopify ${res.status}: ${body.slice(0, 200)}`)
     }
-    return res.json()
+    return res
   }
   throw new Error('Shopify rate limited after retries')
 }
 
+export async function shopifyFetch(path: string, retries = 2): Promise<any> {
+  const base = getShopifyBase()
+  const url = path.startsWith('http') ? path : `${base}${path}`
+  const res = await shopifyRawFetch(url, retries)
+  return res.json()
+}
+
+function parseLinkHeader(header: string | null): string | null {
+  if (!header) return null
+  const match = header.match(/<([^>]+)>;\s*rel="next"/)
+  return match ? match[1] : null
+}
+
 export async function shopifyFetchAll(basePath: string, resourceKey: string, maxPages = 20): Promise<any[]> {
+  const base = getShopifyBase()
   let all: any[] = []
-  let url: string | null = basePath.includes('?') ? `${basePath}&limit=250` : `${basePath}?limit=250`
+  const seen = new Set<number>()
+  let url: string | null = `${base}${basePath.includes('?') ? `${basePath}&limit=250` : `${basePath}?limit=250`}`
 
   for (let page = 0; page < maxPages && url; page++) {
-    const data = await shopifyFetch(url)
+    const res = await shopifyRawFetch(url)
+    const data = await res.json()
     const items = data[resourceKey]
     if (!Array.isArray(items) || items.length === 0) break
-    all = all.concat(items)
 
-    // Parse Link header for cursor pagination
-    url = null
-    // Shopify returns pagination info in the response for REST API
-    // For simplicity, if we got less than 250 items, we're done
-    if (items.length < 250) break
-
-    // Check if there's a next page via link header (handled differently in fetch)
-    // We need to construct the next URL from page_info
-    // Actually, Shopify REST API uses page_info parameter
-    // The link info is embedded in the response headers which we don't have access to
-    // in the shopifyFetch helper. Let's use a simpler approach with since_id
-    const lastId = items[items.length - 1]?.id
-    if (lastId) {
-      const sep = basePath.includes('?') ? '&' : '?'
-      url = `${basePath}${sep}limit=250&since_id=${lastId}`
+    // Deduplicate by id
+    for (const item of items) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id)
+        all.push(item)
+      }
     }
 
-    await delay(500) // Rate limit protection
+    if (items.length < 250) break
+
+    // Use Link header for cursor pagination (preferred by Shopify)
+    url = parseLinkHeader(res.headers.get('Link'))
+    if (!url) break
+
+    await delay(500)
   }
   return all
 }

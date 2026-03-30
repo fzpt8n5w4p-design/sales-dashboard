@@ -19,11 +19,13 @@ export async function GET() {
         id: v.id,
         title: v.title,
         sku: v.sku || '',
+        barcode: v.barcode || '',
         price: parseFloat(v.price || '0'),
         compareAtPrice: v.compare_at_price ? parseFloat(v.compare_at_price) : null,
         inventoryQuantity: v.inventory_quantity ?? 0,
       }))
       const totalStock = variants.reduce((s: number, v: any) => s + v.inventoryQuantity, 0)
+      const stockValue = variants.reduce((s: number, v: any) => s + v.price * Math.max(0, v.inventoryQuantity), 0)
       return {
         id: p.id,
         title: p.title,
@@ -32,6 +34,7 @@ export async function GET() {
         status: p.status,
         variants,
         totalStock,
+        stockValue,
         image: p.image?.src || p.images?.[0]?.src || null,
         createdAt: p.created_at,
       }
@@ -40,6 +43,7 @@ export async function GET() {
     const outOfStock = mapped.filter((p: any) => p.totalStock <= 0).length
     const lowStock = mapped.filter((p: any) => p.totalStock > 0 && p.totalStock <= 10).length
     const totalStockUnits = mapped.reduce((s: number, p: any) => s + p.totalStock, 0)
+    const totalStockValue = mapped.reduce((s: number, p: any) => s + p.stockValue, 0)
 
     const result = {
       ok: true,
@@ -50,6 +54,7 @@ export async function GET() {
         outOfStock,
         lowStock,
         totalStockUnits,
+        totalStockValue,
       },
     }
 

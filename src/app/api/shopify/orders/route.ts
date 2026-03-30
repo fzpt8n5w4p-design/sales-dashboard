@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { subDays, startOfDay, endOfDay, differenceInDays } from 'date-fns'
+import { subDays, subYears, startOfDay, endOfDay, differenceInDays } from 'date-fns'
 import { shopifyFetchAll } from '../lib'
 
 export const dynamic = 'force-dynamic'
@@ -41,28 +41,37 @@ export async function GET(req: NextRequest) {
     const prevSince = startOfDay(subDays(since, periodDays))
     const prevUntil = endOfDay(subDays(since, 1))
 
+    // Year-on-year: same period last year
+    const yoySince = subYears(since, 1)
+    const yoyUntil = subYears(until, 1)
+
     const sinceISO = since.toISOString()
     const untilISO = until.toISOString()
     const prevSinceISO = prevSince.toISOString()
     const prevUntilISO = prevUntil.toISOString()
+    const yoySinceISO = yoySince.toISOString()
+    const yoyUntilISO = yoyUntil.toISOString()
 
-    const [orders, prevOrders] = await Promise.all([
+    const [orders, prevOrders, yoyOrders] = await Promise.all([
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${sinceISO}&created_at_max=${untilISO}`, 'orders'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${yoySinceISO}&created_at_max=${yoyUntilISO}`, 'orders'),
     ])
 
     const total = orders.length
     const revenue = orders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
     const prevTotal = prevOrders.length
     const prevRevenue = prevOrders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
+    const yoyTotal = yoyOrders.length
+    const yoyRevenue = yoyOrders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
 
-    // Top products by quantity and revenue
-    const productMap: Record<string, { name: string; sku: string; qty: number; revenue: number }> = {}
+    // Top products by quantity and revenue (include product_id for links)
+    const productMap: Record<string, { name: string; sku: string; qty: number; revenue: number; productId: number | null }> = {}
     let totalUnits = 0
     for (const order of orders) {
       for (const item of (order.line_items || [])) {
         const key = item.sku || item.title
-        if (!productMap[key]) productMap[key] = { name: item.title || item.name || 'Unknown', sku: item.sku || '', qty: 0, revenue: 0 }
+        if (!productMap[key]) productMap[key] = { name: item.title || item.name || 'Unknown', sku: item.sku || '', qty: 0, revenue: 0, productId: item.product_id || null }
         productMap[key].qty += item.quantity || 0
         productMap[key].revenue += parseFloat(item.price || '0') * (item.quantity || 0)
         totalUnits += item.quantity || 0
@@ -100,6 +109,7 @@ export async function GET(req: NextRequest) {
       ok: true,
       orders: { total, revenue, hourly, totalUnits },
       prevOrders: { total: prevTotal, revenue: prevRevenue },
+      yoyOrders: { total: yoyTotal, revenue: yoyRevenue },
       topByQty,
       topByRevenue,
       recentOrders,
