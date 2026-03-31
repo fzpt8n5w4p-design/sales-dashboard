@@ -21,7 +21,10 @@ export async function GET() {
     const spendYTD: Record<number, number> = {}
     const activeCustomerIds = new Set<number>()
 
+    const excludeStatuses = new Set(['cancelled', 'voided', 'refunded'])
+
     for (const o of orders30d) {
+      if (excludeStatuses.has(o.financial_status) || o.cancelled_at) continue
       const cid = o.customer?.id
       if (cid) {
         spend30d[cid] = (spend30d[cid] || 0) + parseFloat(o.total_price || '0')
@@ -30,13 +33,14 @@ export async function GET() {
     }
 
     for (const o of ordersYTD) {
+      if (excludeStatuses.has(o.financial_status) || o.cancelled_at) continue
       const cid = o.customer?.id
       if (cid) {
         spendYTD[cid] = (spendYTD[cid] || 0) + parseFloat(o.total_price || '0')
       }
     }
 
-    const totalRevenue30d = orders30d.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
+    const totalRevenue30d = orders30d.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at).reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
 
     const mapped = customers.map((c: any) => ({
       id: c.id,
@@ -58,6 +62,7 @@ export async function GET() {
       customers: mapped,
       totalCustomers: mapped.length,
       totalSpendAll: mapped.reduce((s: number, c: any) => s + c.totalSpent, 0),
+      totalSpendYTD: mapped.reduce((s: number, c: any) => s + c.spendYTD, 0),
       totalRevenue30d,
       activeCustomers30d: activeCustomerIds.size,
     })

@@ -45,7 +45,10 @@ export async function shopifyFetchAll(basePath: string, resourceKey: string, max
   const base = getShopifyBase()
   let all: any[] = []
   const seen = new Set<number>()
-  let url: string | null = `${base}${basePath.includes('?') ? `${basePath}&limit=250` : `${basePath}?limit=250`}`
+  const hasLimit = basePath.includes('limit=')
+  let url: string | null = hasLimit
+    ? `${base}${basePath}`
+    : `${base}${basePath.includes('?') ? `${basePath}&limit=250` : `${basePath}?limit=250`}`
 
   for (let page = 0; page < maxPages && url; page++) {
     const res = await shopifyRawFetch(url)

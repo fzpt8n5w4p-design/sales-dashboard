@@ -52,6 +52,7 @@ interface CustomersData {
   customers: Customer[]
   totalCustomers: number
   totalSpendAll: number
+  totalSpendYTD: number
   totalRevenue30d: number
   activeCustomers30d: number
 }
@@ -165,6 +166,7 @@ export default function B2BPage() {
   const [topProductDays, setTopProductDays] = useState(30)
   const [topCustomerDays, setTopCustomerDays] = useState(30)
   const [dormantDays, setDormantDays] = useState(30)
+  const [chartDays, setChartDays] = useState(30)
 
   const [ordersData, setOrdersData] = useState<OrdersData | null>(null)
   const [customersData, setCustomersData] = useState<CustomersData | null>(null)
@@ -215,13 +217,13 @@ export default function B2BPage() {
       .catch(() => {})
   }, [dormantDays])
 
-  // Fetch history (30-day chart, new accounts, outstanding)
+  // Fetch history (chart, new accounts, outstanding)
   useEffect(() => {
-    fetch('/api/shopify/history')
+    fetch(`/api/shopify/history?days=${chartDays}`)
       .then(r => r.json())
       .then(d => { if (d.ok) setHistoryData(d) })
       .catch(() => {})
-  }, [])
+  }, [chartDays])
 
   // Fetch customers & products once on mount
   useEffect(() => {
@@ -462,9 +464,12 @@ export default function B2BPage() {
               </div>
             )}
 
-            {/* 30-Day Chart — right below stats */}
+            {/* Sales Chart — right below stats */}
             <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', marginBottom: 20 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Last 30 Days</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1 }}>Sales Overview</div>
+                <PillSelect options={[{ key: 7, label: '7d' }, { key: 14, label: '14d' }, { key: 30, label: '30d' }, { key: 60, label: '60d' }, { key: 90, label: '90d' }, { key: 180, label: '180d' }]} value={chartDays} onChange={setChartDays} />
+              </div>
               {!historyData ? <Shimmer height={180} /> : !historyData.daily.length ? (
                 <div style={{ fontSize: 13, color: t.text3 }}>No data</div>
               ) : (
@@ -483,7 +488,7 @@ export default function B2BPage() {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} interval={Math.floor(historyData.daily.length / 6)} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} interval={Math.max(1, Math.floor(historyData.daily.length / 8))} />
                         <YAxis yAxisId="orders" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} />
                         <YAxis yAxisId="revenue" orientation="right" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${currency}${(v/1000).toFixed(0)}k` : `${currency}${v}`} />
                         <Tooltip contentStyle={{ background: 'rgba(28,28,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
@@ -506,7 +511,135 @@ export default function B2BPage() {
               )}
             </div>
 
-            {/* Top Products + Top Customers + Recent Orders — 3 columns */}
+            {/* Top Customers (with YoY) + Pie Chart + Recent Orders */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 20 }}>
+              {/* Top Customers with YoY */}
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: t.text1 }}>Top Customers</div>
+                  <PillSelect options={[{ key: 7, label: '7d' }, { key: 14, label: '14d' }, { key: 30, label: '30d' }, { key: 60, label: '60d' }, { key: 90, label: '90d' }, { key: 180, label: '180d' }]} value={topCustomerDays} onChange={setTopCustomerDays} />
+                </div>
+                {!dashboardData.customers ? <Shimmer height={300} /> : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
+                        <th style={{ textAlign: 'left', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Customer</th>
+                        <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Spend</th>
+                        <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>YoY</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dashboardData.customers.topCustomers.map((c, i) => {
+                        const yoyPct = c.yoySpend > 0 ? ((c.spend - c.yoySpend) / c.yoySpend * 100) : null
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                            <td style={{ padding: '7px 8px 7px 0', fontSize: 12 }}>
+                              {c.customerId ? <ShopifyLink href={`${SHOPIFY_ADMIN}/customers/${c.customerId}`}>{c.name}</ShopifyLink> : <span style={{ color: t.text1 }}>{c.name}</span>}
+                            </td>
+                            <td style={{ padding: '7px 4px 7px 0', fontSize: 12, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(c.spend, 0)}</td>
+                            <td style={{ padding: '7px 0', fontSize: 11, textAlign: 'right', fontWeight: 600, color: yoyPct === null ? t.text3 : yoyPct >= 0 ? t.green : t.red }}>
+                              {yoyPct === null ? 'New' : `${yoyPct >= 0 ? '▲' : '▼'}${Math.abs(yoyPct).toFixed(0)}%`}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Customer Revenue Pie Chart */}
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Revenue Split</div>
+                {!dashboardData.customers ? <Shimmer height={250} /> : (() => {
+                  const pieSlices = dashboardData.customers.topCustomers.slice(0, 8).map(c => ({ name: c.name, value: c.spend }))
+                  const pieTotal = pieSlices.reduce((s, c) => s + c.value, 0)
+                  return (
+                    <>
+                      <div style={{ width: '100%', height: 160, position: 'relative' }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={pieSlices}
+                              cx="50%" cy="50%" innerRadius={42} outerRadius={68}
+                              paddingAngle={3} dataKey="value" stroke="none"
+                              animationBegin={0} animationDuration={800} animationEasing="ease-out"
+                            >
+                              {pieSlices.map((_, i) => (
+                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip formatter={(v: number) => `${currency}${fmt(v, 0)}`} contentStyle={{ background: 'rgba(28,28,30,0.95)', border: `1px solid ${t.cardBorder}`, borderRadius: 8, fontSize: 12, color: t.text1, backdropFilter: 'blur(20px)' }} itemStyle={{ color: t.text2 }} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: t.text1, letterSpacing: '-0.02em', lineHeight: 1 }}>{currency}{fmt(pieTotal, 0)}</div>
+                          <div style={{ fontSize: 9, color: t.text3, marginTop: 2 }}>total</div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        {pieSlices.map((c, i) => (
+                          <div key={c.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: 2, background: PIE_COLORS[i % PIE_COLORS.length], flexShrink: 0, display: 'inline-block' }} />
+                              <span style={{ fontSize: 11, color: t.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: t.text1, flexShrink: 0, marginLeft: 8 }}>{currency}{fmt(c.value, 0)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+
+              {/* Recent Orders — last 10 */}
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Recent Orders</div>
+                {ordersLoading && !ordersData ? <Shimmer height={300} /> : (
+                  <>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
+                            {['Order', 'Customer', 'Date', 'Total', 'Status'].map(h => (
+                              <th key={h} style={{ textAlign: h === 'Total' ? 'right' : 'left', padding: '6px 8px 6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(ordersData?.recentOrders || []).slice(0, 10).map(o => (
+                            <tr key={o.id} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                              <td style={{ padding: '8px 8px 8px 0', fontSize: 12 }}>
+                                <ShopifyLink href={`${SHOPIFY_ADMIN}/orders/${o.id}`}>{o.name}</ShopifyLink>
+                              </td>
+                              <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.text1 }}>{o.customer}</td>
+                              <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.text3, whiteSpace: 'nowrap' }}>{new Date(o.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</td>
+                              <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(o.total, 2)}</td>
+                              <td style={{ padding: '8px 0' }}>
+                                <span style={{
+                                  fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4,
+                                  background: o.status === 'paid' ? 'rgba(48,209,88,0.15)' : 'rgba(255,159,10,0.15)',
+                                  color: o.status === 'paid' ? t.green : t.orange,
+                                }}>{o.status}</span>
+                              </td>
+                            </tr>
+                          ))}
+                          {ordersData && ordersData.recentOrders.length === 0 && (
+                            <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: t.text3 }}>No orders in this period</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ textAlign: 'center', marginTop: 12 }}>
+                      <a href={`${SHOPIFY_ADMIN}/orders`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: t.blue, textDecoration: 'none', fontWeight: 500 }}>View more →</a>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Top Products — 2 columns */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16, marginBottom: 20 }}>
               {/* Top Products by Revenue */}
               <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
@@ -569,108 +702,9 @@ export default function B2BPage() {
               </div>
             </div>
 
-            {/* Top Customers (with YoY) + Pie Chart + Recent Orders */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 20 }}>
-              {/* Top Customers with YoY */}
-              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: t.text1 }}>Top Customers</div>
-                  <PillSelect options={[{ key: 7, label: '7d' }, { key: 14, label: '14d' }, { key: 30, label: '30d' }, { key: 60, label: '60d' }, { key: 90, label: '90d' }, { key: 180, label: '180d' }]} value={topCustomerDays} onChange={setTopCustomerDays} />
-                </div>
-                {!dashboardData.customers ? <Shimmer height={300} /> : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
-                        <th style={{ textAlign: 'left', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Customer</th>
-                        <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Spend</th>
-                        <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>YoY</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dashboardData.customers.topCustomers.map((c, i) => {
-                        const yoyPct = c.yoySpend > 0 ? ((c.spend - c.yoySpend) / c.yoySpend * 100) : null
-                        return (
-                          <tr key={i} style={{ borderBottom: `1px solid ${t.separator}` }}>
-                            <td style={{ padding: '7px 8px 7px 0', fontSize: 12 }}>
-                              {c.customerId ? <ShopifyLink href={`${SHOPIFY_ADMIN}/customers/${c.customerId}`}>{c.name}</ShopifyLink> : <span style={{ color: t.text1 }}>{c.name}</span>}
-                            </td>
-                            <td style={{ padding: '7px 4px 7px 0', fontSize: 12, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(c.spend, 0)}</td>
-                            <td style={{ padding: '7px 0', fontSize: 11, textAlign: 'right', fontWeight: 600, color: yoyPct === null ? t.text3 : yoyPct >= 0 ? t.green : t.red }}>
-                              {yoyPct === null ? 'New' : `${yoyPct >= 0 ? '▲' : '▼'}${Math.abs(yoyPct).toFixed(0)}%`}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {/* Customer Revenue Pie Chart */}
-              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Revenue Split</div>
-                {!dashboardData.customers ? <Shimmer height={250} /> : (
-                  <div style={{ flex: 1, minHeight: 250 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={dashboardData.customers.topCustomers.slice(0, 10).map(c => ({ name: c.name, value: c.spend }))}
-                          cx="50%" cy="50%" innerRadius={50} outerRadius={90}
-                          paddingAngle={2} dataKey="value"
-                        >
-                          {dashboardData.customers.topCustomers.slice(0, 10).map((_, i) => (
-                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(v: number) => `${currency}${fmt(v, 0)}`} contentStyle={{ background: 'rgba(28,28,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </div>
-
-              {/* Recent Orders — last 10 */}
-              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Recent Orders</div>
-                {ordersLoading && !ordersData ? <Shimmer height={300} /> : (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
-                          {['Order', 'Customer', 'Total', 'Status'].map(h => (
-                            <th key={h} style={{ textAlign: h === 'Total' ? 'right' : 'left', padding: '6px 8px 6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(ordersData?.recentOrders || []).slice(0, 10).map(o => (
-                          <tr key={o.id} style={{ borderBottom: `1px solid ${t.separator}` }}>
-                            <td style={{ padding: '8px 8px 8px 0', fontSize: 12 }}>
-                              <ShopifyLink href={`${SHOPIFY_ADMIN}/orders/${o.id}`}>{o.name}</ShopifyLink>
-                            </td>
-                            <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.text1 }}>{o.customer}</td>
-                            <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(o.total, 2)}</td>
-                            <td style={{ padding: '8px 0' }}>
-                              <span style={{
-                                fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4,
-                                background: o.status === 'paid' ? 'rgba(48,209,88,0.15)' : 'rgba(255,159,10,0.15)',
-                                color: o.status === 'paid' ? t.green : t.orange,
-                              }}>{o.status}</span>
-                            </td>
-                          </tr>
-                        ))}
-                        {ordersData && ordersData.recentOrders.length === 0 && (
-                          <tr><td colSpan={4} style={{ padding: 20, textAlign: 'center', color: t.text3 }}>No orders in this period</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Dormant Customers */}
-            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', marginTop: 16 }}>
+            {/* Dormant Customers + Outstanding Orders — side by side */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginTop: 16 }}>
+            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div style={{ fontSize: 14, fontWeight: 600, color: t.text1 }}>
                   Dormant Customers {dormantData ? <span style={{ color: t.orange, fontWeight: 700 }}>({dormantData.total})</span> : null}
@@ -680,7 +714,7 @@ export default function B2BPage() {
               <div style={{ fontSize: 11, color: t.text3, marginBottom: 12 }}>Customers who haven&apos;t ordered in the last {dormantDays} days</div>
               {!dormantData ? <Shimmer height={200} /> : (
                 <div style={{ overflowX: 'auto', maxHeight: 400, overflowY: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ borderBottom: `1px solid ${t.separator}`, position: 'sticky', top: 0, background: t.card }}>
                         {['Customer', 'Company', 'Orders', 'Total Spent', 'Days Since Order'].map(h => (
@@ -722,10 +756,10 @@ export default function B2BPage() {
               }
               const customers = Object.values(grouped).sort((a, b) => b.totalOwed - a.totalOwed)
               return (
-                <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', marginTop: 16 }}>
+                <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Outstanding by Customer</div>
                   <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
                           {['Customer', 'Company', 'Orders', 'Total Owed'].map(h => (
@@ -750,6 +784,7 @@ export default function B2BPage() {
                 </div>
               )
             })()}
+            </div>
           </>
         )}
 
@@ -773,14 +808,15 @@ export default function B2BPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 20 }}>
               {customersLoading && !customersData ? (
                 <>
-                  {[...Array(4)].map((_, i) => <div key={i}><Shimmer height={90} /></div>)}
+                  {[...Array(5)].map((_, i) => <div key={i}><Shimmer height={90} /></div>)}
                 </>
               ) : customersData ? (
                 <>
+                  <StatCard label={`Revenue (${range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? '7d' : range === '30days' ? '30d' : 'Custom'})`} value={ordersData ? `${currency}${fmt(ordersData.orders.revenue, 0)}` : '-'} color={t.green} />
                   <StatCard label="Total Customers" value={fmt(customersData.totalCustomers)} color={t.text1} />
                   <StatCard label="Active Last 30d" value={fmt(customersData.activeCustomers30d)} color={t.blue} />
                   <StatCard label="Revenue (30d)" value={`${currency}${fmt(customersData.totalRevenue30d, 0)}`} color={t.green} />
-                  <StatCard label="Total Spend (All Time)" value={`${currency}${fmt(customersData.totalSpendAll, 0)}`} color={t.text2} />
+                  <StatCard label="YTD Revenue" value={`${currency}${fmt(customersData.totalSpendYTD, 0)}`} color={t.text2} />
                 </>
               ) : null}
             </div>
@@ -792,38 +828,47 @@ export default function B2BPage() {
             }}>
               {customersLoading && !customersData ? <Shimmer height={400} /> : (
                 <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800, tableLayout: 'fixed' }}>
+                    <colgroup>
+                      <col style={{ width: '16%' }} />
+                      <col style={{ width: '12%' }} />
+                      <col style={{ width: '22%' }} />
+                      <col style={{ width: '10%' }} />
+                      <col style={{ width: '14%' }} />
+                      <col style={{ width: '14%' }} />
+                      <col style={{ width: '12%' }} />
+                    </colgroup>
                     <thead>
                       <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
-                        <th style={{ textAlign: 'left', padding: '10px 12px 10px 0' }}>
+                        <th style={{ textAlign: 'left', padding: '10px 16px 10px 0' }}>
                           <button type="button" onClick={() => toggleCustomerSort('name')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 500, color: customerSort === 'name' ? t.text1 : t.text3, cursor: 'pointer' }}>Name{custSortIndicator('name')}</button>
                         </th>
-                        <th style={{ textAlign: 'left', padding: '10px 12px 10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Company</th>
-                        <th style={{ textAlign: 'left', padding: '10px 12px 10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Email</th>
-                        <th style={{ textAlign: 'right', padding: '10px 12px 10px 0' }}>
+                        <th style={{ textAlign: 'left', padding: '10px 16px 10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Company</th>
+                        <th style={{ textAlign: 'left', padding: '10px 16px 10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Email</th>
+                        <th style={{ textAlign: 'right', padding: '10px 16px 10px 0' }}>
                           <button type="button" onClick={() => toggleCustomerSort('orders')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 500, color: customerSort === 'orders' ? t.text1 : t.text3, cursor: 'pointer' }}>Orders{custSortIndicator('orders')}</button>
                         </th>
-                        <th style={{ textAlign: 'right', padding: '10px 12px 10px 0' }}>
-                          <button type="button" onClick={() => toggleCustomerSort('ytd')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 500, color: customerSort === 'ytd' ? t.text1 : t.text3, cursor: 'pointer' }}>YTD Spend{custSortIndicator('ytd')}</button>
+                        <th style={{ textAlign: 'right', padding: '10px 16px 10px 0' }}>
+                          <button type="button" onClick={() => toggleCustomerSort('ytd')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 500, color: customerSort === 'ytd' ? t.text1 : t.text3, cursor: 'pointer' }}>YTD Revenue{custSortIndicator('ytd')}</button>
                         </th>
-                        <th style={{ textAlign: 'right', padding: '10px 12px 10px 0' }}>
+                        <th style={{ textAlign: 'right', padding: '10px 16px 10px 0' }}>
                           <button type="button" onClick={() => toggleCustomerSort('allTime')} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 500, color: customerSort === 'allTime' ? t.text1 : t.text3, cursor: 'pointer' }}>All Time{custSortIndicator('allTime')}</button>
                         </th>
-                        <th style={{ textAlign: 'left', padding: '10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Last Order</th>
+                        <th style={{ textAlign: 'right', padding: '10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Last Order</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredCustomers.map(c => (
                         <tr key={c.id} style={{ borderBottom: `1px solid ${t.separator}` }}>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, fontWeight: 500 }}>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             <ShopifyLink href={`${SHOPIFY_ADMIN}/customers/${c.id}`}>{c.name}</ShopifyLink>
                           </td>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.text2 }}>{c.company || '-'}</td>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.text2 }}>{c.email}</td>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.text1, textAlign: 'right' }}>{c.ordersCount}</td>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(c.spendYTD, 2)}</td>
-                          <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.text2, textAlign: 'right' }}>{currency}{fmt(c.totalSpent, 0)}</td>
-                          <td style={{ padding: '12px 0', fontSize: 12, color: t.text2 }}>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 12, color: t.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.company || '-'}</td>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 12, color: t.text2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.email}</td>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 13, color: t.text1, textAlign: 'right' }}>{c.ordersCount}</td>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 13, color: t.green, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(c.spendYTD, 2)}</td>
+                          <td style={{ padding: '12px 16px 12px 0', fontSize: 13, color: t.text2, textAlign: 'right' }}>{currency}{fmt(c.totalSpent, 0)}</td>
+                          <td style={{ padding: '12px 0', fontSize: 12, color: t.text2, textAlign: 'right', whiteSpace: 'nowrap' }}>
                             {c.lastOrderDate ? new Date(c.lastOrderDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
                           </td>
                         </tr>
