@@ -82,7 +82,7 @@ interface DashboardData { topProducts: DashboardTopProduct[]; topCustomers: Dash
 interface DormantCustomer { id: number; name: string; email: string; company: string; ordersCount: number; totalSpent: number; lastOrderDate: string; daysSince: number }
 interface DormantData { dormant: DormantCustomer[]; total: number; threshold: number }
 
-interface DailyPoint { label: string; orders: number; units: number; revenue: number }
+interface DailyPoint { label: string; orders: number; units: number; revenue: number; prevOrders?: number; prevRevenue?: number }
 interface OutstandingOrder { id: number; name: string; customer: string; company: string; customerId: number | null; total: number; status: string; date: string }
 interface HistoryData {
   daily: DailyPoint[]
