@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { subDays, startOfDay, endOfDay, format } from 'date-fns'
+import { subDays, subYears, startOfDay, endOfDay, format } from 'date-fns'
 import { shopifyFetchAll } from '../lib'
 
 export const dynamic = 'force-dynamic'
@@ -19,8 +19,13 @@ export async function GET(req: NextRequest) {
     const since = startOfDay(subDays(now, days))
     const until = endOfDay(now)
 
-    const [orders, customers] = await Promise.all([
+    // Previous year same period
+    const prevSince = subYears(since, 1)
+    const prevUntil = subYears(until, 1)
+
+    const [orders, prevYearOrders, customers] = await Promise.all([
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${since.toISOString()}&created_at_max=${until.toISOString()}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSince.toISOString()}&created_at_max=${prevUntil.toISOString()}`, 'orders'),
       shopifyFetchAll('/customers.json', 'customers'),
     ])
 
@@ -42,7 +47,27 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const daily = Object.entries(dailyMap).map(([label, data]) => ({ label, ...data }))
+    // Previous year daily breakdown (aligned by day offset)
+    const prevDailyMap: Record<number, { orders: number; revenue: number }> = {}
+    for (let d = 0; d <= days; d++) {
+      prevDailyMap[d] = { orders: 0, revenue: 0 }
+    }
+    const activePrevOrders = prevYearOrders.filter((o: any) => !o.cancelled_at && o.financial_status !== 'voided')
+    for (const order of activePrevOrders) {
+      const orderDate = new Date(order.created_at)
+      const dayOffset = Math.floor((orderDate.getTime() - prevSince.getTime()) / (1000 * 60 * 60 * 24))
+      if (dayOffset >= 0 && dayOffset <= days && prevDailyMap[dayOffset]) {
+        prevDailyMap[dayOffset].orders++
+        prevDailyMap[dayOffset].revenue += parseFloat(order.total_price || '0')
+      }
+    }
+
+    const daily = Object.entries(dailyMap).map(([label, data], i) => ({
+      label,
+      ...data,
+      prevOrders: prevDailyMap[i]?.orders || 0,
+      prevRevenue: prevDailyMap[i]?.revenue || 0,
+    }))
 
     // New accounts in last 30 days vs previous 30 days
     const prev30Start = subDays(since, 30)

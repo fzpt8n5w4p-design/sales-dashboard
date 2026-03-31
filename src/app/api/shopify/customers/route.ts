@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { subDays, startOfDay, startOfYear, endOfDay } from 'date-fns'
+import { subDays, subYears, startOfDay, startOfYear, endOfDay } from 'date-fns'
 import { shopifyFetchAll } from '../lib'
 
 export const dynamic = 'force-dynamic'
@@ -10,10 +10,15 @@ export async function GET() {
     const thirtyDaysAgo = startOfDay(subDays(now, 30))
     const yearStart = startOfYear(now)
 
-    const [customers, orders30d, ordersYTD] = await Promise.all([
+    // Previous year same YTD period
+    const prevYearStart = subYears(yearStart, 1)
+    const prevYearNow = subYears(now, 1)
+
+    const [customers, orders30d, ordersYTD, ordersPrevYTD] = await Promise.all([
       shopifyFetchAll('/customers.json', 'customers'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${thirtyDaysAgo.toISOString()}&created_at_max=${endOfDay(now).toISOString()}`, 'orders'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${yearStart.toISOString()}&created_at_max=${endOfDay(now).toISOString()}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevYearStart.toISOString()}&created_at_max=${endOfDay(prevYearNow).toISOString()}`, 'orders'),
     ])
 
     // Build per-customer 30d and YTD spend maps
@@ -63,6 +68,7 @@ export async function GET() {
       totalCustomers: mapped.length,
       totalSpendAll: mapped.reduce((s: number, c: any) => s + c.totalSpent, 0),
       totalSpendYTD: mapped.reduce((s: number, c: any) => s + c.spendYTD, 0),
+      prevYTDRevenue: ordersPrevYTD.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at).reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0),
       totalRevenue30d,
       activeCustomers30d: activeCustomerIds.size,
     })
