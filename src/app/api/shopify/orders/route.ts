@@ -52,23 +52,29 @@ export async function GET(req: NextRequest) {
     const yoySinceISO = yoySince.toISOString()
     const yoyUntilISO = yoyUntil.toISOString()
 
-    const [orders, prevOrders, yoyOrders] = await Promise.all([
+    const [orders, prevOrders, yoyOrders, latestOrders] = await Promise.all([
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${sinceISO}&created_at_max=${untilISO}`, 'orders'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`, 'orders'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${yoySinceISO}&created_at_max=${yoyUntilISO}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&limit=10`, 'orders', 10),
     ])
 
-    const total = orders.length
-    const revenue = orders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
-    const prevTotal = prevOrders.length
-    const prevRevenue = prevOrders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
-    const yoyTotal = yoyOrders.length
-    const yoyRevenue = yoyOrders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
+    const isActive = (o: any) => !o.cancelled_at && o.financial_status !== 'voided'
+    const activeOrders = orders.filter(isActive)
+    const activePrev = prevOrders.filter(isActive)
+    const activeYoy = yoyOrders.filter(isActive)
+
+    const total = activeOrders.length
+    const revenue = activeOrders.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
+    const prevTotal = activePrev.length
+    const prevRevenue = activePrev.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
+    const yoyTotal = activeYoy.length
+    const yoyRevenue = activeYoy.reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0)
 
     // Top products by quantity and revenue (include product_id for links)
     const productMap: Record<string, { name: string; sku: string; qty: number; revenue: number; productId: number | null }> = {}
     let totalUnits = 0
-    for (const order of orders) {
+    for (const order of activeOrders) {
       for (const item of (order.line_items || [])) {
         const key = item.sku || item.title
         if (!productMap[key]) productMap[key] = { name: item.title || item.name || 'Unknown', sku: item.sku || '', qty: 0, revenue: 0, productId: item.product_id || null }
@@ -81,10 +87,10 @@ export async function GET(req: NextRequest) {
     const topByQty = [...products].sort((a, b) => b.qty - a.qty).slice(0, 10)
     const topByRevenue = [...products].sort((a, b) => b.revenue - a.revenue).slice(0, 10)
 
-    // Recent orders (last 20)
-    const recentOrders = orders
+    // Recent orders — always the latest 10 regardless of date filter
+    const recentOrders = latestOrders
       .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 20)
+      .slice(0, 10)
       .map((o: any) => ({
         id: o.id,
         name: o.name,

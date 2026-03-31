@@ -22,9 +22,13 @@ export async function GET(req: NextRequest) {
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${yoySince.toISOString()}&created_at_max=${yoyUntil.toISOString()}`, 'orders'),
     ])
 
+    const isActive = (o: any) => !o.cancelled_at && o.financial_status !== 'voided'
+    const activeOrders = orders.filter(isActive)
+    const activeYoy = yoyOrders.filter(isActive)
+
     // Top products by revenue
     const productMap: Record<string, { name: string; sku: string; qty: number; revenue: number; productId: number | null }> = {}
-    for (const order of orders) {
+    for (const order of activeOrders) {
       for (const item of (order.line_items || [])) {
         const key = item.product_id?.toString() || item.sku || item.title
         if (!productMap[key]) productMap[key] = { name: item.title || 'Unknown', sku: item.sku || '', qty: 0, revenue: 0, productId: item.product_id || null }
@@ -36,14 +40,14 @@ export async function GET(req: NextRequest) {
 
     // Build YoY customer spend map
     const yoyCustomerSpend: Record<string, number> = {}
-    for (const order of yoyOrders) {
+    for (const order of activeYoy) {
       const cid = order.customer?.id?.toString() || order.customer?.email || 'guest'
       yoyCustomerSpend[cid] = (yoyCustomerSpend[cid] || 0) + parseFloat(order.total_price || '0')
     }
 
     // Top customers by spend with YoY
     const customerMap: Record<string, { name: string; company: string; customerId: number | null; spend: number; orderCount: number; lastOrderDate: string }> = {}
-    for (const order of orders) {
+    for (const order of activeOrders) {
       const cid = order.customer?.id?.toString() || order.customer?.email || 'guest'
       if (!customerMap[cid]) {
         customerMap[cid] = {

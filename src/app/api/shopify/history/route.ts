@@ -1,20 +1,22 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { subDays, startOfDay, endOfDay, format } from 'date-fns'
 import { shopifyFetchAll } from '../lib'
 
 export const dynamic = 'force-dynamic'
 
-let historyCache: { data: any; fetchedAt: number } | null = null
+const historyCache: Record<number, { data: any; fetchedAt: number }> = {}
 const CACHE_TTL = 5 * 60 * 1000
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    if (historyCache && Date.now() - historyCache.fetchedAt < CACHE_TTL) {
-      return NextResponse.json(historyCache.data)
+    const days = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get('days') || '30') || 30, 7), 180)
+
+    if (historyCache[days] && Date.now() - historyCache[days].fetchedAt < CACHE_TTL) {
+      return NextResponse.json(historyCache[days].data)
     }
 
     const now = new Date()
-    const since = startOfDay(subDays(now, 30))
+    const since = startOfDay(subDays(now, days))
     const until = endOfDay(now)
 
     const [orders, customers] = await Promise.all([
@@ -24,12 +26,14 @@ export async function GET() {
 
     // Daily breakdown
     const dailyMap: Record<string, { orders: number; units: number; revenue: number }> = {}
-    for (let d = 0; d <= 30; d++) {
-      const date = format(subDays(now, 30 - d), 'dd MMM')
+    for (let d = 0; d <= days; d++) {
+      const date = format(subDays(now, days - d), 'dd MMM')
       dailyMap[date] = { orders: 0, units: 0, revenue: 0 }
     }
 
-    for (const order of orders) {
+    const activeOrders = orders.filter((o: any) => !o.cancelled_at && o.financial_status !== 'voided')
+
+    for (const order of activeOrders) {
       const date = format(new Date(order.created_at), 'dd MMM')
       if (dailyMap[date]) {
         dailyMap[date].orders++
@@ -56,9 +60,9 @@ export async function GET() {
       return d >= lastYearStart && d <= lastYearEnd
     }).length
 
-    // Outstanding balances (unpaid/partially paid orders)
+    // Outstanding balances (unpaid/partially paid orders, excluding cancelled)
     const outstandingOrders = orders
-      .filter((o: any) => o.financial_status !== 'paid' && o.financial_status !== 'refunded' && o.financial_status !== 'voided')
+      .filter((o: any) => !o.cancelled_at && o.financial_status !== 'paid' && o.financial_status !== 'refunded' && o.financial_status !== 'voided')
       .map((o: any) => ({
         id: o.id,
         name: o.name,
@@ -80,7 +84,7 @@ export async function GET() {
       outstanding: { orders: outstandingOrders, total: outstandingTotal, count: outstandingOrders.length },
     }
 
-    historyCache = { data: result, fetchedAt: Date.now() }
+    historyCache[days] = { data: result, fetchedAt: Date.now() }
     return NextResponse.json(result)
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
