@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 
 const navLinks = [
   { label: 'Dashboard', href: '/' },
+  { label: 'B2B Wholesale', href: '/b2b' },
   { label: 'Unlisted Products', href: '/unlisted' },
 ]
 
