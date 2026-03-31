@@ -53,6 +53,7 @@ interface CustomersData {
   totalCustomers: number
   totalSpendAll: number
   totalSpendYTD: number
+  prevYTDRevenue: number
   totalRevenue30d: number
   activeCustomers30d: number
 }
@@ -177,6 +178,9 @@ export default function B2BPage() {
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [customersLoading, setCustomersLoading] = useState(false)
   const [productsLoading, setProductsLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [dashboardLoading, setDashboardLoading] = useState(false)
+  const anyLoading = ordersLoading || customersLoading || productsLoading || historyLoading || dashboardLoading
 
   // Fetch orders (depends on range)
   const fetchOrders = useCallback(() => {
@@ -195,34 +199,42 @@ export default function B2BPage() {
 
   // Fetch dashboard top products
   useEffect(() => {
+    setDashboardLoading(true)
     fetch(`/api/shopify/dashboard?days=${topProductDays}`)
       .then(r => r.json())
       .then(d => { if (d.ok) setDashboardData(prev => ({ ...prev, products: d })) })
       .catch(() => {})
+      .finally(() => setDashboardLoading(false))
   }, [topProductDays])
 
   // Fetch dashboard top customers
   useEffect(() => {
+    setDashboardLoading(true)
     fetch(`/api/shopify/dashboard?days=${topCustomerDays}`)
       .then(r => r.json())
       .then(d => { if (d.ok) setDashboardData(prev => ({ ...prev, customers: d })) })
       .catch(() => {})
+      .finally(() => setDashboardLoading(false))
   }, [topCustomerDays])
 
   // Fetch dormant customers
   useEffect(() => {
+    setDashboardLoading(true)
     fetch(`/api/shopify/dormant?days=${dormantDays}`)
       .then(r => r.json())
       .then(d => { if (d.ok) setDormantData(d) })
       .catch(() => {})
+      .finally(() => setDashboardLoading(false))
   }, [dormantDays])
 
   // Fetch history (chart, new accounts, outstanding)
   useEffect(() => {
+    setHistoryLoading(true)
     fetch(`/api/shopify/history?days=${chartDays}`)
       .then(r => r.json())
       .then(d => { if (d.ok) setHistoryData(d) })
       .catch(() => {})
+      .finally(() => setHistoryLoading(false))
   }, [chartDays])
 
   // Fetch customers & products once on mount
@@ -365,6 +377,9 @@ export default function B2BPage() {
           <span style={{ fontSize: 15, fontWeight: 600 }}>B2B Wholesale</span>
           <span style={{ fontSize: 12, color: t.text3, marginLeft: 4 }}>b2b.ridecore.pro</span>
         </div>
+        {anyLoading && (
+          <div style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.1)', borderTopColor: t.blue, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        )}
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           {ranges.map(r => (
@@ -446,23 +461,41 @@ export default function B2BPage() {
               )}
             </div>
 
-            {/* Change indicators */}
-            {ordersData && (
-              <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
-                {ordersData.prevOrders.total > 0 && (
-                  <>
-                    <ChangeIndicator label="vs previous" current={ordersData.orders.total} previous={ordersData.prevOrders.total} />
-                    <ChangeIndicator label="revenue vs previous" current={ordersData.orders.revenue} previous={ordersData.prevOrders.revenue} />
-                  </>
-                )}
-                {ordersData.yoyOrders && ordersData.yoyOrders.total > 0 && (
-                  <>
-                    <ChangeIndicator label="vs last year" current={ordersData.orders.total} previous={ordersData.yoyOrders.total} />
-                    <ChangeIndicator label="revenue vs last year" current={ordersData.orders.revenue} previous={ordersData.yoyOrders.revenue} />
-                  </>
-                )}
-              </div>
-            )}
+            {/* YoY Comparison Tiles */}
+            {ordersData && (ordersData.prevOrders.total > 0 || (ordersData.yoyOrders && ordersData.yoyOrders.total > 0)) && (() => {
+              const rangeLabel = range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? '7 Days' : range === '30days' ? '30 Days' : 'Custom'
+              const tiles: { label: string; current: number; previous: number; prefix?: string; period: string }[] = []
+              if (ordersData.prevOrders.total > 0) {
+                tiles.push({ label: 'Orders', current: ordersData.orders.total, previous: ordersData.prevOrders.total, period: `vs Previous ${rangeLabel}` })
+                tiles.push({ label: 'Revenue', current: ordersData.orders.revenue, previous: ordersData.prevOrders.revenue, prefix: currency, period: `vs Previous ${rangeLabel}` })
+              }
+              if (ordersData.yoyOrders && ordersData.yoyOrders.total > 0) {
+                tiles.push({ label: 'Orders', current: ordersData.orders.total, previous: ordersData.yoyOrders.total, period: `vs Last Year (${rangeLabel})` })
+                tiles.push({ label: 'Revenue', current: ordersData.orders.revenue, previous: ordersData.yoyOrders.revenue, prefix: currency, period: `vs Last Year (${rangeLabel})` })
+              }
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${tiles.length}, 1fr)`, gap: 12, marginBottom: 16 }}>
+                  {tiles.map((tile, i) => {
+                    const pct = tile.previous > 0 ? ((tile.current - tile.previous) / tile.previous * 100) : 0
+                    const up = pct >= 0
+                    return (
+                      <div key={i} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: '14px 16px', backdropFilter: 'blur(40px)' }}>
+                        <div style={{ fontSize: 11, color: t.text3, marginBottom: 6 }}>{tile.label}</div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                          <span style={{ fontSize: 22, fontWeight: 700, color: up ? t.green : t.red }}>
+                            {up ? '▲' : '▼'}{Math.abs(pct).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: t.text3, marginTop: 6 }}>
+                          {tile.prefix || ''}{fmt(tile.current, tile.prefix ? 0 : undefined)} vs {tile.prefix || ''}{fmt(tile.previous, tile.prefix ? 0 : undefined)}
+                        </div>
+                        <div style={{ fontSize: 10, color: t.text3, marginTop: 2, opacity: 0.7 }}>{tile.period}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
 
             {/* Sales Chart — right below stats */}
             <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', marginBottom: 20 }}>
@@ -491,22 +524,73 @@ export default function B2BPage() {
                         <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} interval={Math.max(1, Math.floor(historyData.daily.length / 8))} />
                         <YAxis yAxisId="orders" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} />
                         <YAxis yAxisId="revenue" orientation="right" tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `${currency}${(v/1000).toFixed(0)}k` : `${currency}${v}`} />
-                        <Tooltip contentStyle={{ background: 'rgba(28,28,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
+                        <Tooltip content={({ active, payload, label }: any) => {
+                          if (!active || !payload?.length) return null
+                          const d = payload[0]?.payload
+                          if (!d) return null
+                          const ordersPct = d.prevOrders > 0 ? ((d.orders - d.prevOrders) / d.prevOrders * 100) : null
+                          const revPct = d.prevRevenue > 0 ? ((d.revenue - d.prevRevenue) / d.prevRevenue * 100) : null
+                          return (
+                            <div style={{ background: 'rgba(28,28,30,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 12 }}>
+                              <div style={{ color: t.text1, fontWeight: 600, marginBottom: 6 }}>{label}</div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: t.blue, marginBottom: 3 }}>
+                                <span>Orders: {d.orders}</span>
+                                {ordersPct !== null && <span style={{ color: ordersPct >= 0 ? t.green : t.red, fontWeight: 600 }}>{ordersPct >= 0 ? '▲' : '▼'}{Math.abs(ordersPct).toFixed(0)}%</span>}
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, color: t.green, marginBottom: 3 }}>
+                                <span>Revenue: {currency}{fmt(d.revenue, 0)}</span>
+                                {revPct !== null && <span style={{ color: revPct >= 0 ? t.green : t.red, fontWeight: 600 }}>{revPct >= 0 ? '▲' : '▼'}{Math.abs(revPct).toFixed(0)}%</span>}
+                              </div>
+                              <div style={{ color: t.red, marginBottom: 2, fontSize: 11 }}>Prev Orders: {d.prevOrders || 0}</div>
+                              <div style={{ color: '#ffd60a', fontSize: 11 }}>Prev Revenue: {currency}{fmt(d.prevRevenue || 0, 0)}</div>
+                            </div>
+                          )
+                        }} />
+                        <Area yAxisId="orders" type="monotone" dataKey="prevOrders" stroke={t.red} strokeWidth={1.5} strokeDasharray="4 3" fill="none" dot={false} />
+                        <Area yAxisId="revenue" type="monotone" dataKey="prevRevenue" stroke="#ffd60a" strokeWidth={1.5} strokeDasharray="4 3" fill="none" dot={false} />
                         <Area yAxisId="orders" type="monotone" dataKey="orders" stroke={t.blue} strokeWidth={2} fill="url(#b2bOrdersFill)" />
                         <Area yAxisId="revenue" type="monotone" dataKey="revenue" stroke={t.green} strokeWidth={2} fill="url(#b2bRevenueFill)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
-                  <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ width: 12, height: 3, borderRadius: 2, background: t.blue, display: 'inline-block' }} />
-                      <span style={{ fontSize: 11, color: t.text3 }}>Orders</span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ width: 12, height: 3, borderRadius: 2, background: t.green, display: 'inline-block' }} />
-                      <span style={{ fontSize: 11, color: t.text3 }}>Revenue</span>
-                    </div>
-                  </div>
+                  {(() => {
+                    const totalOrders = historyData.daily.reduce((s, d) => s + d.orders, 0)
+                    const totalRevenue = historyData.daily.reduce((s, d) => s + d.revenue, 0)
+                    const prevTotalOrders = historyData.daily.reduce((s, d) => s + (d.prevOrders || 0), 0)
+                    const prevTotalRevenue = historyData.daily.reduce((s, d) => s + (d.prevRevenue || 0), 0)
+                    const ordersPct = prevTotalOrders > 0 ? ((totalOrders - prevTotalOrders) / prevTotalOrders * 100) : null
+                    const revenuePct = prevTotalRevenue > 0 ? ((totalRevenue - prevTotalRevenue) / prevTotalRevenue * 100) : null
+                    return (
+                      <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 12, height: 3, borderRadius: 2, background: t.blue, display: 'inline-block' }} />
+                          <span style={{ fontSize: 11, color: t.text3 }}>Orders</span>
+                          {ordersPct !== null && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: ordersPct >= 0 ? t.green : t.red }}>
+                              {ordersPct >= 0 ? '▲' : '▼'}{Math.abs(ordersPct).toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 12, height: 3, borderRadius: 2, background: t.green, display: 'inline-block' }} />
+                          <span style={{ fontSize: 11, color: t.text3 }}>Revenue</span>
+                          {revenuePct !== null && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: revenuePct >= 0 ? t.green : t.red }}>
+                              {revenuePct >= 0 ? '▲' : '▼'}{Math.abs(revenuePct).toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 12, height: 3, borderRadius: 2, background: t.red, display: 'inline-block' }} />
+                          <span style={{ fontSize: 11, color: t.text3 }}>Prev Year Orders</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ width: 12, height: 3, borderRadius: 2, background: '#ffd60a', display: 'inline-block' }} />
+                          <span style={{ fontSize: 11, color: t.text3 }}>Prev Year Revenue</span>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </>
               )}
             </div>
@@ -816,7 +900,15 @@ export default function B2BPage() {
                   <StatCard label="Total Customers" value={fmt(customersData.totalCustomers)} color={t.text1} />
                   <StatCard label="Active Last 30d" value={fmt(customersData.activeCustomers30d)} color={t.blue} />
                   <StatCard label="Revenue (30d)" value={`${currency}${fmt(customersData.totalRevenue30d, 0)}`} color={t.green} />
-                  <StatCard label="YTD Revenue" value={`${currency}${fmt(customersData.totalSpendYTD, 0)}`} color={t.text2} />
+                  {(() => {
+                    const ytd = customersData.totalSpendYTD
+                    const prevYtd = customersData.prevYTDRevenue
+                    const pct = prevYtd > 0 ? ((ytd - prevYtd) / prevYtd * 100) : null
+                    const sub = pct !== null
+                      ? `${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}% vs last year (${currency}${fmt(prevYtd, 0)})`
+                      : undefined
+                    return <StatCard label="YTD Revenue" value={`${currency}${fmt(ytd, 0)}`} color={t.text2} sub={sub} />
+                  })()}
                 </>
               ) : null}
             </div>
