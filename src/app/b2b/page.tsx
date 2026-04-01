@@ -32,7 +32,7 @@ function fmt(n: number, decimals = 0) {
 }
 
 /* ---------- types ---------- */
-type Tab = 'dashboard' | 'customers' | 'products'
+type Tab = 'dashboard' | 'customers' | 'products' | 'checkouts'
 type Range = 'today' | 'yesterday' | '7days' | '30days' | 'custom'
 
 interface OrdersData {
@@ -55,7 +55,12 @@ interface CustomersData {
   totalSpendYTD: number
   prevYTDRevenue: number
   totalRevenue30d: number
+  prevRevenue30d: number
+  prevYearRevenue30d: number
   activeCustomers30d: number
+  prevActiveCustomers30d: number
+  prevYearActiveCustomers30d: number
+  totalCustomersPrevYear: number
 }
 
 interface ProductVariant {
@@ -92,6 +97,7 @@ interface HistoryData {
 
 /* ---------- sub-components ---------- */
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color: string }) {
+  const subColor = sub?.startsWith('▲') ? t.green : sub?.startsWith('▼') ? t.red : t.text3
   return (
     <div style={{
       flex: '1 1 0', minWidth: 120, padding: '16px 18px',
@@ -100,7 +106,7 @@ function StatCard({ label, value, sub, color }: { label: string; value: string |
     }}>
       <div style={{ fontSize: 13, fontWeight: 500, color: t.text2, marginBottom: 8 }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color, letterSpacing: '-0.02em' }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: t.text3, marginTop: 4 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 12, color: subColor, marginTop: 4 }}>{sub}</div>}
     </div>
   )
 }
@@ -179,8 +185,10 @@ export default function B2BPage() {
   const [customersLoading, setCustomersLoading] = useState(false)
   const [productsLoading, setProductsLoading] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [checkoutsData, setCheckoutsData] = useState<any>(null)
+  const [checkoutsLoading, setCheckoutsLoading] = useState(false)
   const [dashboardLoading, setDashboardLoading] = useState(false)
-  const anyLoading = ordersLoading || customersLoading || productsLoading || historyLoading || dashboardLoading
+  const anyLoading = ordersLoading || customersLoading || productsLoading || historyLoading || dashboardLoading || checkoutsLoading
 
   // Fetch orders (depends on range)
   const fetchOrders = useCallback(() => {
@@ -252,6 +260,13 @@ export default function B2BPage() {
       .then(d => { if (d.ok) setProductsData(d) })
       .catch(() => {})
       .finally(() => setProductsLoading(false))
+
+    setCheckoutsLoading(true)
+    fetch('/api/shopify/checkouts')
+      .then(r => r.json())
+      .then(d => { if (d.ok) setCheckoutsData(d) })
+      .catch(() => {})
+      .finally(() => setCheckoutsLoading(false))
   }, [])
 
   // Auto-refresh every 60s
@@ -354,6 +369,7 @@ export default function B2BPage() {
     { key: 'dashboard', label: 'B2B Dashboard' },
     { key: 'customers', label: 'Customers' },
     { key: 'products', label: 'Products' },
+    { key: 'checkouts', label: 'Abandoned Checkouts' },
   ]
 
   const stockColor = (qty: number) => qty <= 0 ? t.red : qty <= 10 ? t.orange : t.green
@@ -382,16 +398,18 @@ export default function B2BPage() {
         )}
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          {ranges.map(r => (
-            <button key={r.key} onClick={() => setRange(r.key)} style={{
-              padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-              border: 'none', cursor: 'pointer', transition: 'all 0.15s',
-              background: range === r.key ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: range === r.key ? t.text1 : t.text2,
-            }}>
-              {r.label}
-            </button>
-          ))}
+          <div style={{ display: 'flex', gap: 4, background: 'rgba(255,255,255,0.04)', borderRadius: 22, padding: 3 }}>
+            {ranges.map(r => (
+              <button key={r.key} onClick={() => setRange(r.key)} style={{
+                padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                border: 'none', cursor: 'pointer', transition: 'all 0.15s',
+                background: range === r.key ? 'rgba(255,255,255,0.12)' : 'transparent',
+                color: range === r.key ? t.text1 : t.text2,
+              }}>
+                {r.label}
+              </button>
+            ))}
+          </div>
           {range === 'custom' && (
             <>
               <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)} style={{
@@ -405,6 +423,10 @@ export default function B2BPage() {
               }} />
             </>
           )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.green, display: 'inline-block' }} />
+            <span style={{ fontSize: 11, color: t.text2 }}>Shopify B2B</span>
+          </div>
         </div>
       </div>
 
@@ -444,19 +466,37 @@ export default function B2BPage() {
                 </>
               ) : (
                 <>
-                  <StatCard label="Orders" value={ordersData ? fmt(ordersData.orders.total) : '-'} color={t.text1}
-                    sub={ordersData?.prevOrders.total ? `Prev: ${fmt(ordersData.prevOrders.total)}` : undefined} />
-                  <StatCard label="Revenue" value={ordersData ? `${currency}${fmt(ordersData.orders.revenue, 2)}` : '-'} color={t.green}
-                    sub={ordersData?.prevOrders.revenue ? `Prev: ${currency}${fmt(ordersData.prevOrders.revenue, 0)}` : undefined} />
-                  <StatCard label="Avg Order Value"
-                    value={ordersData?.orders.total ? `${currency}${fmt(ordersData.orders.revenue / ordersData.orders.total, 2)}` : '-'}
-                    color={t.blue} />
-                  <StatCard label="Units Sold" value={ordersData ? fmt(ordersData.orders.totalUnits) : '-'} color={t.teal} />
-                  <StatCard label="New Accounts (30d)" value={historyData ? String(historyData.newAccounts.current) : '-'} color={t.purple}
-                    sub={historyData?.newAccounts.previous ? `Prev: ${historyData.newAccounts.previous}` : undefined} />
-                  <StatCard label="Outstanding" value={historyData ? `${currency}${fmt(historyData.outstanding.total, 0)}` : '-'}
-                    color={historyData && historyData.outstanding.total > 0 ? t.orange : t.green}
-                    sub={historyData ? `${historyData.outstanding.count} unpaid` : undefined} />
+                {(() => {
+                  const pctSub = (current: number, previous: number, label: string) => {
+                    if (!previous) return undefined
+                    const pct = ((current - previous) / previous * 100)
+                    return `${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}% ${label}`
+                  }
+                  const rangeLabel = range === 'today' ? 'yesterday' : range === 'yesterday' ? 'prev day' : range === '7days' ? 'prev 7d' : range === '30days' ? 'prev 30d' : 'prev period'
+                  return (
+                    <>
+                      <StatCard label="Orders" value={ordersData ? fmt(ordersData.orders.total) : '-'} color={t.text1}
+                        sub={ordersData?.prevOrders.total ? pctSub(ordersData.orders.total, ordersData.prevOrders.total, `vs ${rangeLabel} (${fmt(ordersData.prevOrders.total)})`) : undefined} />
+                      <StatCard label="Revenue" value={ordersData ? `${currency}${fmt(ordersData.orders.revenue, 2)}` : '-'} color={t.green}
+                        sub={ordersData?.prevOrders.revenue ? pctSub(ordersData.orders.revenue, ordersData.prevOrders.revenue, `vs ${rangeLabel} (${currency}${fmt(ordersData.prevOrders.revenue, 0)})`) : undefined} />
+                      <StatCard label="Avg Order Value"
+                        value={ordersData?.orders.total ? `${currency}${fmt(ordersData.orders.revenue / ordersData.orders.total, 2)}` : '-'}
+                        color={t.blue}
+                        sub={ordersData?.prevOrders.total && ordersData?.prevOrders.revenue ? pctSub(
+                          ordersData.orders.revenue / ordersData.orders.total,
+                          ordersData.prevOrders.revenue / ordersData.prevOrders.total,
+                          `vs ${rangeLabel} (${currency}${fmt(ordersData.prevOrders.revenue / ordersData.prevOrders.total, 2)})`
+                        ) : undefined} />
+                      <StatCard label="Units Sold" value={ordersData ? fmt(ordersData.orders.totalUnits) : '-'} color={t.teal}
+                        sub={ordersData?.prevOrders?.total ? pctSub(ordersData.orders.totalUnits, (ordersData as any).prevOrders.totalUnits || 0, `vs ${rangeLabel}`) : undefined} />
+                      <StatCard label="New Accounts (30d)" value={historyData ? String(historyData.newAccounts.current) : '-'} color={t.purple}
+                        sub={historyData?.newAccounts.previous ? pctSub(historyData.newAccounts.current, historyData.newAccounts.previous, `vs prev 30d (${historyData.newAccounts.previous})`) : undefined} />
+                      <StatCard label="Outstanding" value={historyData ? `${currency}${fmt(historyData.outstanding.total, 0)}` : '-'}
+                        color={historyData && historyData.outstanding.total > 0 ? t.orange : t.green}
+                        sub={historyData ? `${historyData.outstanding.count} unpaid orders` : undefined} />
+                    </>
+                  )
+                })()}
                 </>
               )}
             </div>
@@ -466,12 +506,12 @@ export default function B2BPage() {
               const rangeLabel = range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? '7 Days' : range === '30days' ? '30 Days' : 'Custom'
               const tiles: { label: string; current: number; previous: number; prefix?: string; period: string }[] = []
               if (ordersData.prevOrders.total > 0) {
-                tiles.push({ label: 'Orders', current: ordersData.orders.total, previous: ordersData.prevOrders.total, period: `vs Previous ${rangeLabel}` })
-                tiles.push({ label: 'Revenue', current: ordersData.orders.revenue, previous: ordersData.prevOrders.revenue, prefix: currency, period: `vs Previous ${rangeLabel}` })
+                tiles.push({ label: 'Orders vs Previous Period', current: ordersData.orders.total, previous: ordersData.prevOrders.total, period: `${rangeLabel} vs previous ${rangeLabel}` })
+                tiles.push({ label: 'Revenue vs Previous Period', current: ordersData.orders.revenue, previous: ordersData.prevOrders.revenue, prefix: currency, period: `${rangeLabel} vs previous ${rangeLabel}` })
               }
               if (ordersData.yoyOrders && ordersData.yoyOrders.total > 0) {
-                tiles.push({ label: 'Orders', current: ordersData.orders.total, previous: ordersData.yoyOrders.total, period: `vs Last Year (${rangeLabel})` })
-                tiles.push({ label: 'Revenue', current: ordersData.orders.revenue, previous: ordersData.yoyOrders.revenue, prefix: currency, period: `vs Last Year (${rangeLabel})` })
+                tiles.push({ label: 'Orders vs Last Year', current: ordersData.orders.total, previous: ordersData.yoyOrders.total, period: `${rangeLabel} vs same period last year` })
+                tiles.push({ label: 'Revenue vs Last Year', current: ordersData.orders.revenue, previous: ordersData.yoyOrders.revenue, prefix: currency, period: `${rangeLabel} vs same period last year` })
               }
               return (
                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(${tiles.length}, 1fr)`, gap: 12, marginBottom: 16 }}>
@@ -480,16 +520,16 @@ export default function B2BPage() {
                     const up = pct >= 0
                     return (
                       <div key={i} style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: '14px 16px', backdropFilter: 'blur(40px)' }}>
-                        <div style={{ fontSize: 11, color: t.text3, marginBottom: 6 }}>{tile.label}</div>
+                        <div style={{ fontSize: 12, color: t.text2, marginBottom: 6, fontWeight: 500 }}>{tile.label}</div>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                           <span style={{ fontSize: 22, fontWeight: 700, color: up ? t.green : t.red }}>
                             {up ? '▲' : '▼'}{Math.abs(pct).toFixed(1)}%
                           </span>
                         </div>
-                        <div style={{ fontSize: 11, color: t.text3, marginTop: 6 }}>
+                        <div style={{ fontSize: 12, color: t.text2, marginTop: 6 }}>
                           {tile.prefix || ''}{fmt(tile.current, tile.prefix ? 0 : undefined)} vs {tile.prefix || ''}{fmt(tile.previous, tile.prefix ? 0 : undefined)}
                         </div>
-                        <div style={{ fontSize: 10, color: t.text3, marginTop: 2, opacity: 0.7 }}>{tile.period}</div>
+                        <div style={{ fontSize: 11, color: t.text2, marginTop: 3, opacity: 0.8 }}>{tile.period}</div>
                       </div>
                     )
                   })}
@@ -896,18 +936,37 @@ export default function B2BPage() {
                 </>
               ) : customersData ? (
                 <>
-                  <StatCard label={`Revenue (${range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? '7d' : range === '30days' ? '30d' : 'Custom'})`} value={ordersData ? `${currency}${fmt(ordersData.orders.revenue, 0)}` : '-'} color={t.green} />
-                  <StatCard label="Total Customers" value={fmt(customersData.totalCustomers)} color={t.text1} />
-                  <StatCard label="Active Last 30d" value={fmt(customersData.activeCustomers30d)} color={t.blue} />
-                  <StatCard label="Revenue (30d)" value={`${currency}${fmt(customersData.totalRevenue30d, 0)}`} color={t.green} />
                   {(() => {
-                    const ytd = customersData.totalSpendYTD
-                    const prevYtd = customersData.prevYTDRevenue
-                    const pct = prevYtd > 0 ? ((ytd - prevYtd) / prevYtd * 100) : null
-                    const sub = pct !== null
-                      ? `${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}% vs last year (${currency}${fmt(prevYtd, 0)})`
-                      : undefined
-                    return <StatCard label="YTD Revenue" value={`${currency}${fmt(ytd, 0)}`} color={t.text2} sub={sub} />
+                    const pctSub = (current: number, previous: number, label: string) => {
+                      if (!previous) return undefined
+                      const pct = ((current - previous) / previous * 100)
+                      return `${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}% ${label}`
+                    }
+                    const revLabel = range === 'today' ? 'Today' : range === 'yesterday' ? 'Yesterday' : range === '7days' ? '7d' : range === '30days' ? '30d' : 'Custom'
+                    return (
+                      <>
+                        <StatCard label={`Revenue (${revLabel})`}
+                          value={ordersData ? `${currency}${fmt(ordersData.orders.revenue, 0)}` : '-'}
+                          color={t.green}
+                          sub={ordersData?.prevOrders?.revenue ? pctSub(ordersData.orders.revenue, ordersData.prevOrders.revenue, 'vs prev period') : undefined} />
+                        <StatCard label="Total Customers"
+                          value={fmt(customersData.totalCustomers)}
+                          color={t.text1}
+                          sub={customersData.totalCustomersPrevYear ? pctSub(customersData.totalCustomers, customersData.totalCustomersPrevYear, 'vs last year') : undefined} />
+                        <StatCard label="Active Last 30d"
+                          value={fmt(customersData.activeCustomers30d)}
+                          color={t.blue}
+                          sub={customersData.prevActiveCustomers30d ? pctSub(customersData.activeCustomers30d, customersData.prevActiveCustomers30d, `vs prev 30d (${customersData.prevActiveCustomers30d})`) : undefined} />
+                        <StatCard label="Revenue (30d)"
+                          value={`${currency}${fmt(customersData.totalRevenue30d, 0)}`}
+                          color={t.green}
+                          sub={customersData.prevRevenue30d ? pctSub(customersData.totalRevenue30d, customersData.prevRevenue30d, `vs prev 30d (${currency}${fmt(customersData.prevRevenue30d, 0)})`) : undefined} />
+                        <StatCard label="YTD Revenue"
+                          value={`${currency}${fmt(customersData.totalSpendYTD, 0)}`}
+                          color={t.text2}
+                          sub={customersData.prevYTDRevenue ? pctSub(customersData.totalSpendYTD, customersData.prevYTDRevenue, `vs last year (${currency}${fmt(customersData.prevYTDRevenue, 0)})`) : undefined} />
+                      </>
+                    )
                   })()}
                 </>
               ) : null}
@@ -1110,6 +1169,111 @@ export default function B2BPage() {
                 </>
               )}
             </div>
+          </>
+        )}
+
+        {/* ============= ABANDONED CHECKOUTS TAB ============= */}
+        {tab === 'checkouts' && (
+          <>
+            {/* Stat tiles */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 20 }}>
+              {checkoutsLoading && !checkoutsData ? (
+                <>
+                  {[...Array(3)].map((_, i) => <div key={i}><Shimmer height={90} /></div>)}
+                </>
+              ) : checkoutsData ? (
+                <>
+                  <StatCard label="Abandoned Checkouts" value={fmt(checkoutsData.totalAbandoned)} color={t.orange} />
+                  <StatCard label="Total Lost Revenue" value={`${currency}${fmt(checkoutsData.totalValue, 0)}`} color={t.red} />
+                  <StatCard label="Avg Checkout Value" value={checkoutsData.totalAbandoned > 0 ? `${currency}${fmt(checkoutsData.totalValue / checkoutsData.totalAbandoned, 2)}` : '-'} color={t.text2} />
+                </>
+              ) : null}
+            </div>
+
+            {/* Abandoned checkouts table */}
+            <div style={{
+              background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20,
+              backdropFilter: 'blur(40px)', marginBottom: 20,
+            }}>
+              {checkoutsLoading && !checkoutsData ? <Shimmer height={400} /> : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
+                        {['Customer', 'Company', 'Items', 'Value', 'Date', 'Days Ago', 'Recovery'].map(h => (
+                          <th key={h} style={{ textAlign: h === 'Items' || h === 'Value' || h === 'Days Ago' ? 'right' : 'left', padding: '10px 12px 10px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(checkoutsData?.checkouts || []).map((c: any) => {
+                        const daysAgo = Math.floor((Date.now() - new Date(c.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+                        return (
+                          <tr key={c.id} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 13 }}>
+                              <div style={{ color: t.text1, fontWeight: 500 }}>{c.customer}</div>
+                              <div style={{ fontSize: 11, color: t.text3 }}>{c.email}</div>
+                            </td>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 12, color: t.text2 }}>{c.company || '-'}</td>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.text1, textAlign: 'right' }}>{c.itemCount}</td>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 13, color: t.orange, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(c.total, 2)}</td>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 12, color: t.text2, whiteSpace: 'nowrap' }}>{new Date(c.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                            <td style={{ padding: '12px 12px 12px 0', fontSize: 12, textAlign: 'right', fontWeight: 600, color: daysAgo > 30 ? t.red : daysAgo > 7 ? t.orange : t.text1 }}>{daysAgo}d</td>
+                            <td style={{ padding: '12px 0' }}>
+                              {c.recoveryUrl ? (
+                                <a href={c.recoveryUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: t.blue, textDecoration: 'none', fontWeight: 500 }}>Recover →</a>
+                              ) : <span style={{ fontSize: 11, color: t.text3 }}>-</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {checkoutsData && checkoutsData.checkouts.length === 0 && (
+                        <tr><td colSpan={7} style={{ padding: 20, textAlign: 'center', color: t.text3 }}>No abandoned checkouts</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Expandable items per checkout */}
+            {checkoutsData?.checkouts?.length > 0 && (
+              <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)' }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 12 }}>Most Abandoned Products</div>
+                {(() => {
+                  const productCounts: Record<string, { title: string; count: number; totalValue: number }> = {}
+                  for (const checkout of checkoutsData.checkouts) {
+                    for (const item of checkout.items) {
+                      const key = item.title
+                      if (!productCounts[key]) productCounts[key] = { title: item.title, count: 0, totalValue: 0 }
+                      productCounts[key].count += item.quantity
+                      productCounts[key].totalValue += item.price * item.quantity
+                    }
+                  }
+                  const sorted = Object.values(productCounts).sort((a, b) => b.count - a.count).slice(0, 15)
+                  return (
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
+                          <th style={{ textAlign: 'left', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Product</th>
+                          <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Times Abandoned</th>
+                          <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>Lost Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map((p, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                            <td style={{ padding: '8px 0', fontSize: 12, color: t.text1 }}>{p.title}</td>
+                            <td style={{ padding: '8px 0', fontSize: 12, color: t.orange, textAlign: 'right', fontWeight: 600 }}>{p.count}</td>
+                            <td style={{ padding: '8px 0', fontSize: 12, color: t.red, textAlign: 'right', fontWeight: 600 }}>{currency}{fmt(p.totalValue, 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )
+                })()}
+              </div>
+            )}
           </>
         )}
       </div>

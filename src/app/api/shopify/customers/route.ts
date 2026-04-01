@@ -8,17 +8,22 @@ export async function GET() {
   try {
     const now = new Date()
     const thirtyDaysAgo = startOfDay(subDays(now, 30))
+    const sixtyDaysAgo = startOfDay(subDays(now, 60))
     const yearStart = startOfYear(now)
 
-    // Previous year same YTD period
+    // Previous year same periods
     const prevYearStart = subYears(yearStart, 1)
     const prevYearNow = subYears(now, 1)
+    const prevYear30dAgo = subYears(thirtyDaysAgo, 1)
+    const prevYearNowEnd = endOfDay(prevYearNow)
 
-    const [customers, orders30d, ordersYTD, ordersPrevYTD] = await Promise.all([
+    const [customers, orders30d, prevOrders30d, ordersYTD, ordersPrevYTD, prevYearOrders30d] = await Promise.all([
       shopifyFetchAll('/customers.json', 'customers'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${thirtyDaysAgo.toISOString()}&created_at_max=${endOfDay(now).toISOString()}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${sixtyDaysAgo.toISOString()}&created_at_max=${endOfDay(subDays(thirtyDaysAgo, 1)).toISOString()}`, 'orders'),
       shopifyFetchAll(`/orders.json?status=any&created_at_min=${yearStart.toISOString()}&created_at_max=${endOfDay(now).toISOString()}`, 'orders'),
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevYearStart.toISOString()}&created_at_max=${endOfDay(prevYearNow).toISOString()}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevYearStart.toISOString()}&created_at_max=${prevYearNowEnd.toISOString()}`, 'orders'),
+      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevYear30dAgo.toISOString()}&created_at_max=${prevYearNowEnd.toISOString()}`, 'orders'),
     ])
 
     // Build per-customer 30d and YTD spend maps
@@ -70,7 +75,12 @@ export async function GET() {
       totalSpendYTD: mapped.reduce((s: number, c: any) => s + c.spendYTD, 0),
       prevYTDRevenue: ordersPrevYTD.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at).reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0),
       totalRevenue30d,
+      prevRevenue30d: prevOrders30d.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at).reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0),
+      prevYearRevenue30d: prevYearOrders30d.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at).reduce((s: number, o: any) => s + parseFloat(o.total_price || '0'), 0),
       activeCustomers30d: activeCustomerIds.size,
+      prevActiveCustomers30d: new Set(prevOrders30d.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at && o.customer?.id).map((o: any) => o.customer.id)).size,
+      prevYearActiveCustomers30d: new Set(prevYearOrders30d.filter((o: any) => !excludeStatuses.has(o.financial_status) && !o.cancelled_at && o.customer?.id).map((o: any) => o.customer.id)).size,
+      totalCustomersPrevYear: customers.filter((c: any) => new Date(c.created_at) <= prevYearNow).length,
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
