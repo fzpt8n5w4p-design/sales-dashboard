@@ -1,0 +1,14 @@
+client_id = "717559de9033cf78d05919b0f14ce4aa"
+name = "OpsCore Dashboard"
+application_url = "https://royalblue-dugong-319678.hostingersite.com"
+embedded = false
+
+[access_scopes]
+scopes = "read_all_orders,read_customers,read_companies,read_products,read_inventory"
+use_legacy_install_flow = true
+
+[auth]
+redirect_urls = ["https://royalblue-dugong-319678.hostingersite.com/api/shopify/callback"]
+
+[webhooks]
+api_version = "2026-01"
