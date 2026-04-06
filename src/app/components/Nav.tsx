@@ -4,18 +4,34 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-const navLinks = [
-  { label: 'Dashboard', href: '/' },
-  { label: 'B2B Wholesale', href: '/b2b' },
+interface NavItem {
+  label: string
+  href: string
+  children?: { label: string; href: string }[]
+}
+
+const navLinks: NavItem[] = [
+  { label: 'Main Ops Dashboard', href: '/' },
+  {
+    label: 'B2B Dashboard',
+    href: '/b2b',
+    children: [
+      { label: 'B2B Dashboard', href: '/b2b' },
+      { label: 'Customers', href: '/b2b?tab=customers' },
+      { label: 'Products', href: '/b2b?tab=products' },
+      { label: 'Abandoned Checkouts', href: '/b2b?tab=checkouts' },
+      { label: 'Upload Order', href: '/b2b?tab=create-order' },
+    ],
+  },
   { label: 'Unlisted Products', href: '/unlisted' },
 ]
 
 export default function Nav() {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  // Close on click outside
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false)
@@ -68,12 +84,69 @@ export default function Nav() {
           border: '1px solid rgba(255, 255, 255, 0.08)',
           borderRadius: 12,
           padding: 6,
-          minWidth: 200,
+          minWidth: 220,
           zIndex: 100,
           boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
         }}>
           {navLinks.map(link => {
-            const active = pathname === link.href
+            const active = pathname === link.href || (link.href === '/b2b' && pathname === '/b2b')
+            const isExpanded = expandedGroup === link.label
+
+            if (link.children) {
+              return (
+                <div key={link.href}>
+                  <button
+                    onClick={() => setExpandedGroup(isExpanded ? null : link.label)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: active ? '#f5f5f7' : 'rgba(255, 255, 255, 0.55)',
+                      background: active ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      fontFamily: 'inherit',
+                      transition: 'background 0.15s',
+                    }}
+                  >
+                    {link.label}
+                    <span style={{ fontSize: 10, opacity: 0.5, transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▼</span>
+                  </button>
+                  {isExpanded && (
+                    <div style={{ paddingLeft: 12, paddingBottom: 4 }}>
+                      {link.children.map(child => (
+                        <a
+                          key={child.href}
+                          href={child.href}
+                          onClick={(e) => { e.preventDefault(); setOpen(false); window.location.href = child.href }}
+                          style={{
+                            display: 'block',
+                            padding: '7px 14px',
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 400,
+                            color: 'rgba(255, 255, 255, 0.45)',
+                            background: 'transparent',
+                            textDecoration: 'none',
+                            transition: 'background 0.15s',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {child.label}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+
             return (
               <Link
                 key={link.href}

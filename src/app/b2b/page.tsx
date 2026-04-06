@@ -32,7 +32,7 @@ function fmt(n: number, decimals = 0) {
 }
 
 /* ---------- types ---------- */
-type Tab = 'dashboard' | 'customers' | 'products' | 'checkouts'
+type Tab = 'dashboard' | 'customers' | 'products' | 'checkouts' | 'create-order'
 type Range = 'today' | 'yesterday' | '7days' | '30days' | 'custom'
 
 interface OrdersData {
@@ -156,6 +156,15 @@ function PillSelect({ options, value, onChange }: { options: { key: string | num
 /* ---------- main page ---------- */
 export default function B2BPage() {
   const [tab, setTab] = useState<Tab>('dashboard')
+
+  // Read ?tab= from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const t = params.get('tab') as Tab
+    if (t && ['dashboard', 'customers', 'products', 'checkouts', 'create-order'].includes(t)) {
+      setTab(t)
+    }
+  }, [])
   const [range, setRange] = useState<Range>('today')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
@@ -370,6 +379,7 @@ export default function B2BPage() {
     { key: 'customers', label: 'Customers' },
     { key: 'products', label: 'Products' },
     { key: 'checkouts', label: 'Abandoned Checkouts' },
+    { key: 'create-order', label: 'Upload Order' },
   ]
 
   const stockColor = (qty: number) => qty <= 0 ? t.red : qty <= 10 ? t.orange : t.green
@@ -482,7 +492,7 @@ export default function B2BPage() {
                       <StatCard label="Avg Order Value"
                         value={ordersData?.orders.total ? `${currency}${fmt(ordersData.orders.revenue / ordersData.orders.total, 2)}` : '-'}
                         color={t.blue}
-                        sub={ordersData?.prevOrders.total && ordersData?.prevOrders.revenue ? pctSub(
+                        sub={ordersData?.orders.total && ordersData?.prevOrders.total && ordersData?.prevOrders.revenue ? pctSub(
                           ordersData.orders.revenue / ordersData.orders.total,
                           ordersData.prevOrders.revenue / ordersData.prevOrders.total,
                           `vs ${rangeLabel} (${currency}${fmt(ordersData.prevOrders.revenue / ordersData.prevOrders.total, 2)})`
@@ -1276,7 +1286,565 @@ export default function B2BPage() {
             )}
           </>
         )}
+        {/* ============= CREATE ORDER TAB ============= */}
+        {tab === 'create-order' && (() => {
+          return <CreateOrderWizard customers={customersData?.customers || []} />
+        })()}
       </div>
+    </div>
+  )
+}
+
+/* ============= CREATE ORDER WIZARD (separate component to manage its own state) ============= */
+interface MatchedItem {
+  barcode: string; qty: number; variantId: number; variantTitle: string
+  productTitle: string; productId: number; sku: string; price: number
+  image: string | null; stock: number; lineTotal: number; matchedBy: 'barcode' | 'sku'
+}
+
+function CreateOrderWizard({ customers }: { customers: Array<{ id: number; name: string; email: string; company: string }> }) {
+  const [step, setStep] = useState(1)
+  const [selectedCustomer, setSelectedCustomer] = useState<{ id: number; name: string; company: string } | null>(null)
+  const [customerSearch, setCustomerSearch] = useState('')
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [matching, setMatching] = useState(false)
+  const [matched, setMatched] = useState<MatchedItem[]>([])
+  const [unmatched, setUnmatched] = useState<Array<{ barcode: string; qty: number }>>([])
+  const [summary, setSummary] = useState<{ totalMatched: number; totalUnmatched: number; totalItems: number; totalValue: number; matchRate: number } | null>(null)
+  const [error, setError] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [draftResult, setDraftResult] = useState<{ id: number; name: string; total: number; adminUrl: string } | null>(null)
+  const [sheetsUrl, setSheetsUrl] = useState('')
+  // Column selection fallback
+  const [needsColumnSelection, setNeedsColumnSelection] = useState(false)
+  const [allRows, setAllRows] = useState<string[][]>([])
+  const [columns, setColumns] = useState<string[]>([])
+  const [selectedBarcodeCol, setSelectedBarcodeCol] = useState<number>(-1)
+  const [selectedQtyCol, setSelectedQtyCol] = useState<number>(-1)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch.trim()) return customers.slice(0, 10)
+    const q = customerSearch.toLowerCase()
+    return customers.filter(c =>
+      c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
+    ).slice(0, 10)
+  }, [customers, customerSearch])
+
+  const handleSelectCustomer = (c: { id: number; name: string; company: string }) => {
+    setSelectedCustomer(c)
+    setCustomerSearch(c.name + (c.company ? ` (${c.company})` : ''))
+    setShowDropdown(false)
+    setStep(2)
+  }
+
+  const handleParseResponse = (data: any, file?: File) => {
+    if (data.needsColumnSelection) {
+      setNeedsColumnSelection(true)
+      setAllRows(data.allRows || [])
+      setColumns(data.columns || [])
+      setError('')
+      if (file) setPendingFile(file)
+      return false
+    }
+    if (!data.ok) {
+      setError(data.error || 'Failed to parse')
+      return false
+    }
+    return true
+  }
+
+  const handleFileUpload = async (file: File) => {
+    setUploading(true)
+    setError('')
+    setNeedsColumnSelection(false)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/shopify/parse-sheet', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!handleParseResponse(data, file)) {
+        setUploading(false)
+        return
+      }
+      await matchItems(data.items)
+    } catch {
+      setError('Failed to upload file')
+    }
+    setUploading(false)
+  }
+
+  const handleSheetsUrl = async (barcodeCol?: number, qtyCol?: number) => {
+    if (!sheetsUrl.trim()) return
+    setUploading(true)
+    setError('')
+    setNeedsColumnSelection(false)
+    try {
+      const body: any = { url: sheetsUrl }
+      if (barcodeCol !== undefined) body.barcodeCol = barcodeCol
+      if (qtyCol !== undefined) body.qtyCol = qtyCol
+      const res = await fetch('/api/shopify/parse-sheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!handleParseResponse(data)) {
+        setUploading(false)
+        return
+      }
+      await matchItems(data.items)
+    } catch {
+      setError('Failed to fetch Google Sheet')
+    }
+    setUploading(false)
+  }
+
+  const handleManualColumnSubmit = async () => {
+    if (selectedBarcodeCol === -1 || selectedQtyCol === -1) return
+    if (pendingFile) {
+      setUploading(true)
+      setNeedsColumnSelection(false)
+      try {
+        const formData = new FormData()
+        formData.append('file', pendingFile)
+        formData.append('barcodeCol', String(selectedBarcodeCol))
+        formData.append('qtyCol', String(selectedQtyCol))
+        const res = await fetch('/api/shopify/parse-sheet', { method: 'POST', body: formData })
+        const data = await res.json()
+        if (!data.ok) { setError(data.error || 'Failed to parse'); setUploading(false); return }
+        await matchItems(data.items)
+      } catch { setError('Failed to parse file') }
+      setUploading(false)
+    } else if (sheetsUrl) {
+      await handleSheetsUrl(selectedBarcodeCol, selectedQtyCol)
+    }
+  }
+
+  const matchItems = async (items: Array<{ barcode: string; qty: number }>) => {
+    setMatching(true)
+    try {
+      const res = await fetch('/api/shopify/match-products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      })
+      const data = await res.json()
+      if (!data.ok) {
+        setError(data.error || 'Failed to match products')
+        setMatching(false)
+        return
+      }
+      setMatched(data.matched)
+      setUnmatched(data.unmatched)
+      setSummary(data.summary)
+      setStep(3)
+    } catch {
+      setError('Failed to match products')
+    }
+    setMatching(false)
+  }
+
+  const updateQty = (idx: number, qty: number) => {
+    setMatched(prev => prev.map((m, i) => i === idx ? { ...m, qty, lineTotal: m.price * qty } : m))
+    setSummary(prev => {
+      if (!prev) return prev
+      const newMatched = matched.map((m, i) => i === idx ? { ...m, qty, lineTotal: m.price * qty } : m)
+      return { ...prev, totalItems: newMatched.reduce((s, m) => s + m.qty, 0), totalValue: newMatched.reduce((s, m) => s + m.lineTotal, 0) }
+    })
+  }
+
+  const removeItem = (idx: number) => {
+    setMatched(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const handleCreateDraft = async () => {
+    if (!selectedCustomer || matched.length === 0) return
+    setCreating(true)
+    setError('')
+    try {
+      const res = await fetch('/api/shopify/draft-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: selectedCustomer.id,
+          lineItems: matched.map(m => ({ variantId: m.variantId, quantity: m.qty })),
+        }),
+      })
+      const data = await res.json()
+      if (!data.ok) {
+        setError(data.error || 'Failed to create draft order')
+        setCreating(false)
+        return
+      }
+      setDraftResult(data.draftOrder)
+      setStep(4)
+    } catch {
+      setError('Failed to create draft order')
+    }
+    setCreating(false)
+  }
+
+  const resetWizard = () => {
+    setStep(1)
+    setSelectedCustomer(null)
+    setCustomerSearch('')
+    setMatched([])
+    setUnmatched([])
+    setSummary(null)
+    setError('')
+    setDraftResult(null)
+    setSheetsUrl('')
+    setNeedsColumnSelection(false)
+    setAllRows([])
+    setColumns([])
+    setSelectedBarcodeCol(-1)
+    setSelectedQtyCol(-1)
+    setPendingFile(null)
+  }
+
+  const SHOPIFY_ADMIN = `https://${process.env.NEXT_PUBLIC_SHOPIFY_B2B_STORE || 'b2b.ridecore.pro'}/admin`
+
+  return (
+    <div style={{ padding: '20px 0' }}>
+      {/* Progress steps */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 24 }}>
+        {['Select Customer', 'Upload Order', 'Review & Match', 'Confirmed'].map((label, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 12, fontWeight: 700,
+              background: step > i + 1 ? t.green : step === i + 1 ? t.blue : 'rgba(255,255,255,0.08)',
+              color: step >= i + 1 ? '#fff' : t.text3,
+            }}>{step > i + 1 ? '✓' : i + 1}</div>
+            <span style={{ fontSize: 12, color: step === i + 1 ? t.text1 : t.text3, fontWeight: step === i + 1 ? 600 : 400 }}>{label}</span>
+            {i < 3 && <div style={{ width: 40, height: 1, background: step > i + 1 ? t.green : 'rgba(255,255,255,0.08)' }} />}
+          </div>
+        ))}
+      </div>
+
+      {error && (
+        <div style={{ background: 'rgba(255,69,58,0.12)', border: `1px solid ${t.red}`, borderRadius: t.radius, padding: '12px 16px', marginBottom: 16, fontSize: 13, color: t.red }}>
+          {error}
+          <button onClick={() => setError('')} style={{ float: 'right', background: 'none', border: 'none', color: t.red, cursor: 'pointer', fontSize: 16 }}>×</button>
+        </div>
+      )}
+
+      {/* Step 1: Select Customer */}
+      {step === 1 && (
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 24, backdropFilter: 'blur(40px)', maxWidth: 600 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: t.text1, marginBottom: 4 }}>Select Customer</div>
+          <div style={{ fontSize: 13, color: t.text3, marginBottom: 16 }}>Search for the B2B customer this order is for</div>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              placeholder="Search by name, email or company..."
+              value={customerSearch}
+              onChange={e => { setCustomerSearch(e.target.value); setShowDropdown(true) }}
+              onFocus={() => setShowDropdown(true)}
+              style={{
+                width: '100%', padding: '12px 16px', borderRadius: t.radiusSm, fontSize: 14,
+                background: 'rgba(255,255,255,0.06)', border: `1px solid ${t.cardBorder}`,
+                color: t.text1, fontFamily: font, outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+            {showDropdown && filteredCustomers.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, marginTop: 4,
+                background: 'rgba(28,28,30,0.98)', border: `1px solid ${t.cardBorder}`, borderRadius: t.radiusSm,
+                maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              }}>
+                {filteredCustomers.map(c => (
+                  <button key={c.id} onClick={() => handleSelectCustomer(c)} style={{
+                    display: 'block', width: '100%', textAlign: 'left', padding: '10px 16px',
+                    background: 'none', border: 'none', borderBottom: `1px solid ${t.separator}`,
+                    cursor: 'pointer', color: t.text1, fontFamily: font,
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
+                    <div style={{ fontSize: 11, color: t.text3 }}>{c.company || c.email}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: Upload */}
+      {step === 2 && (
+        <div style={{ maxWidth: 700 }}>
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <span style={{ fontSize: 13, color: t.text3 }}>Customer: </span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: t.text1 }}>{selectedCustomer?.name}</span>
+              {selectedCustomer?.company && <span style={{ fontSize: 12, color: t.text3 }}> ({selectedCustomer.company})</span>}
+            </div>
+            <button onClick={() => { setStep(1); setSelectedCustomer(null); setCustomerSearch('') }} style={{ background: 'none', border: 'none', color: t.blue, fontSize: 12, cursor: 'pointer' }}>Change</button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* File Upload */}
+            <div
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileUpload(f) }}
+              style={{
+                background: t.card, border: `2px dashed ${t.cardBorder}`, borderRadius: t.radius,
+                padding: 32, textAlign: 'center', cursor: 'pointer',
+              }}
+              onClick={() => { const input = document.createElement('input'); input.type = 'file'; input.accept = '.xlsx,.csv,.xls'; input.onchange = (e: any) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f) }; input.click() }}
+            >
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 4 }}>Upload File</div>
+              <div style={{ fontSize: 12, color: t.text3 }}>Drag & drop or click to upload</div>
+              <div style={{ fontSize: 11, color: t.text3, marginTop: 4 }}>.xlsx, .csv</div>
+            </div>
+
+            {/* Google Sheets URL */}
+            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 24 }}>
+              <div style={{ fontSize: 32, marginBottom: 8, textAlign: 'center' }}>📊</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 4, textAlign: 'center' }}>Google Sheets</div>
+              <div style={{ fontSize: 12, color: t.text3, marginBottom: 12, textAlign: 'center' }}>Paste a shared Google Sheets URL</div>
+              <input
+                type="text"
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                value={sheetsUrl}
+                onChange={e => setSheetsUrl(e.target.value)}
+                style={{
+                  width: '100%', padding: '10px 12px', borderRadius: t.radiusSm, fontSize: 12,
+                  background: 'rgba(255,255,255,0.06)', border: `1px solid ${t.cardBorder}`,
+                  color: t.text1, fontFamily: font, outline: 'none', boxSizing: 'border-box', marginBottom: 8,
+                }}
+              />
+              <button
+                onClick={() => handleSheetsUrl()}
+                disabled={!sheetsUrl.trim()}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600,
+                  background: sheetsUrl.trim() ? t.blue : 'rgba(255,255,255,0.06)',
+                  color: sheetsUrl.trim() ? '#fff' : t.text3,
+                  border: 'none', cursor: sheetsUrl.trim() ? 'pointer' : 'default',
+                }}
+              >Import</button>
+            </div>
+          </div>
+
+          {/* Column selection fallback */}
+          {needsColumnSelection && allRows.length > 0 && (
+            <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, marginTop: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: t.text1, marginBottom: 4 }}>Select Columns</div>
+              <div style={{ fontSize: 12, color: t.text3, marginBottom: 16 }}>We couldn&apos;t auto-detect the columns. Please select which columns contain the barcode and quantity.</div>
+
+              {/* Preview of data */}
+              <div style={{ overflowX: 'auto', marginBottom: 16, maxHeight: 200, overflowY: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', fontSize: 11, whiteSpace: 'nowrap' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: '4px 8px', color: t.text3, textAlign: 'left', position: 'sticky', top: 0, background: t.card }}>Row</th>
+                      {(allRows[0] || []).map((_, ci) => (
+                        <th key={ci} style={{
+                          padding: '4px 8px', textAlign: 'left', position: 'sticky', top: 0, background: t.card,
+                          color: ci === selectedBarcodeCol ? t.blue : ci === selectedQtyCol ? t.green : t.text3,
+                          borderBottom: ci === selectedBarcodeCol ? `2px solid ${t.blue}` : ci === selectedQtyCol ? `2px solid ${t.green}` : `1px solid ${t.separator}`,
+                        }}>
+                          Col {ci + 1}
+                          {ci === selectedBarcodeCol && ' (Barcode)'}
+                          {ci === selectedQtyCol && ' (Qty)'}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allRows.map((row, ri) => (
+                      <tr key={ri} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                        <td style={{ padding: '4px 8px', color: t.text3 }}>{ri + 1}</td>
+                        {row.map((cell, ci) => (
+                          <td key={ci} style={{
+                            padding: '4px 8px',
+                            color: ci === selectedBarcodeCol ? t.blue : ci === selectedQtyCol ? t.green : t.text2,
+                            fontWeight: ci === selectedBarcodeCol || ci === selectedQtyCol ? 600 : 400,
+                          }}>{cell || '-'}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <label style={{ fontSize: 12, color: t.text2, display: 'block', marginBottom: 4 }}>Barcode Column</label>
+                  <select
+                    value={selectedBarcodeCol}
+                    onChange={e => setSelectedBarcodeCol(parseInt(e.target.value))}
+                    style={{ padding: '8px 12px', borderRadius: 6, fontSize: 13, background: 'rgba(255,255,255,0.06)', border: `1px solid ${t.cardBorder}`, color: t.text1, fontFamily: font }}
+                  >
+                    <option value={-1}>Select column...</option>
+                    {(allRows[0] || []).map((_, ci) => {
+                      const preview = allRows.slice(0, 10).map(r => r[ci]).filter(Boolean).slice(0, 3).join(', ')
+                      return <option key={ci} value={ci}>Col {ci + 1}: {preview}</option>
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: t.text2, display: 'block', marginBottom: 4 }}>Quantity Column</label>
+                  <select
+                    value={selectedQtyCol}
+                    onChange={e => setSelectedQtyCol(parseInt(e.target.value))}
+                    style={{ padding: '8px 12px', borderRadius: 6, fontSize: 13, background: 'rgba(255,255,255,0.06)', border: `1px solid ${t.cardBorder}`, color: t.text1, fontFamily: font }}
+                  >
+                    <option value={-1}>Select column...</option>
+                    {(allRows[0] || []).map((_, ci) => {
+                      const preview = allRows.slice(0, 10).map(r => r[ci]).filter(Boolean).slice(0, 3).join(', ')
+                      return <option key={ci} value={ci}>Col {ci + 1}: {preview}</option>
+                    })}
+                  </select>
+                </div>
+                <button
+                  onClick={handleManualColumnSubmit}
+                  disabled={selectedBarcodeCol === -1 || selectedQtyCol === -1}
+                  style={{
+                    padding: '10px 24px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600, marginTop: 18,
+                    background: selectedBarcodeCol !== -1 && selectedQtyCol !== -1 ? t.blue : 'rgba(255,255,255,0.06)',
+                    color: selectedBarcodeCol !== -1 && selectedQtyCol !== -1 ? '#fff' : t.text3,
+                    border: 'none', cursor: selectedBarcodeCol !== -1 && selectedQtyCol !== -1 ? 'pointer' : 'default',
+                  }}
+                >Match Products</button>
+              </div>
+            </div>
+          )}
+
+          {(uploading || matching) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, justifyContent: 'center' }}>
+              <div style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.1)', borderTopColor: t.blue, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              <span style={{ fontSize: 13, color: t.text3 }}>{uploading ? 'Parsing file...' : 'Matching products...'}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step 3: Review */}
+      {step === 3 && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 13, color: t.text3 }}>Customer:</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: t.text1 }}>{selectedCustomer?.name}</span>
+            </div>
+            <button onClick={() => setStep(2)} style={{ background: 'none', border: 'none', color: t.blue, fontSize: 12, cursor: 'pointer' }}>Re-upload</button>
+          </div>
+
+          {/* Summary tiles */}
+          {summary && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
+              <StatCard label="Matched Lines" value={fmt(summary.totalMatched)} color={t.green} />
+              <StatCard label="Unmatched" value={fmt(summary.totalUnmatched)} color={summary.totalUnmatched > 0 ? t.red : t.green} />
+              <StatCard label="Total Items" value={fmt(summary.totalItems)} color={t.text1} />
+              <StatCard label="Order Value" value={`£${fmt(summary.totalValue, 2)}`} color={t.green} />
+              <StatCard label="Match Rate" value={`${summary.matchRate}%`} color={summary.matchRate === 100 ? t.green : t.orange} />
+            </div>
+          )}
+
+          {/* Unmatched items */}
+          {unmatched.length > 0 && (
+            <div style={{ background: 'rgba(255,69,58,0.08)', border: `1px solid rgba(255,69,58,0.3)`, borderRadius: t.radius, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: t.red, marginBottom: 8 }}>Unmatched Barcodes ({unmatched.length})</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {unmatched.map((u, i) => (
+                  <span key={i} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, background: 'rgba(255,69,58,0.15)', color: t.red }}>
+                    {u.barcode} (×{u.qty})
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Matched items table */}
+          <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 20, backdropFilter: 'blur(40px)', marginBottom: 16 }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${t.separator}` }}>
+                    {['', 'Product', 'SKU', 'Barcode', 'Stock', 'Qty', 'Price', 'Total', ''].map(h => (
+                      <th key={h} style={{ textAlign: h === 'Qty' || h === 'Price' || h === 'Total' || h === 'Stock' ? 'right' : 'left', padding: '8px 10px 8px 0', fontSize: 11, fontWeight: 500, color: t.text3 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {matched.map((m, i) => (
+                    <tr key={i} style={{ borderBottom: `1px solid ${t.separator}` }}>
+                      <td style={{ padding: '8px 8px 8px 0', width: 40 }}>
+                        {m.image && <img src={m.image} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'cover' }} />}
+                      </td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 12 }}>
+                        <div style={{ color: t.text1, fontWeight: 500 }}>{m.productTitle}</div>
+                        {m.variantTitle && <div style={{ fontSize: 11, color: t.text3 }}>{m.variantTitle}</div>}
+                      </td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 11, color: t.text3 }}>{m.sku}</td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 11, color: t.text3 }}>{m.barcode}</td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 12, textAlign: 'right', color: m.stock <= 0 ? t.red : m.stock < m.qty ? t.orange : t.text2 }}>{m.stock}</td>
+                      <td style={{ padding: '8px 8px 8px 0', textAlign: 'right' }}>
+                        <input
+                          type="number" min={1} value={m.qty}
+                          onChange={e => updateQty(i, parseInt(e.target.value) || 1)}
+                          style={{
+                            width: 60, padding: '4px 8px', borderRadius: 4, fontSize: 13, textAlign: 'right',
+                            background: 'rgba(255,255,255,0.06)', border: `1px solid ${t.cardBorder}`,
+                            color: t.text1, fontFamily: font,
+                          }}
+                        />
+                      </td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.text2, textAlign: 'right' }}>£{fmt(m.price, 2)}</td>
+                      <td style={{ padding: '8px 8px 8px 0', fontSize: 12, color: t.green, textAlign: 'right', fontWeight: 600 }}>£{fmt(m.lineTotal, 2)}</td>
+                      <td style={{ padding: '8px 0', textAlign: 'right' }}>
+                        <button onClick={() => removeItem(i)} style={{ background: 'none', border: 'none', color: t.red, cursor: 'pointer', fontSize: 14 }}>×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Create Draft Order button */}
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+            <button onClick={resetWizard} style={{
+              padding: '12px 24px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600,
+              background: 'rgba(255,255,255,0.06)', color: t.text2, border: 'none', cursor: 'pointer',
+            }}>Cancel</button>
+            <button onClick={handleCreateDraft} disabled={creating || matched.length === 0} style={{
+              padding: '12px 32px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600,
+              background: matched.length > 0 ? t.green : 'rgba(255,255,255,0.06)',
+              color: matched.length > 0 ? '#fff' : t.text3,
+              border: 'none', cursor: matched.length > 0 ? 'pointer' : 'default',
+              opacity: creating ? 0.6 : 1,
+            }}>
+              {creating ? 'Creating...' : `Create Draft Order (£${fmt(matched.reduce((s, m) => s + m.lineTotal, 0), 2)})`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 4: Success */}
+      {step === 4 && draftResult && (
+        <div style={{ background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: t.radius, padding: 32, backdropFilter: 'blur(40px)', maxWidth: 500, textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: t.text1, marginBottom: 8 }}>Draft Order Created</div>
+          <div style={{ fontSize: 14, color: t.text2, marginBottom: 16 }}>
+            {draftResult.name} — £{fmt(draftResult.total, 2)}
+          </div>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <a href={draftResult.adminUrl} target="_blank" rel="noopener noreferrer" style={{
+              padding: '12px 24px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600,
+              background: t.blue, color: '#fff', textDecoration: 'none', display: 'inline-block',
+            }}>View in Shopify →</a>
+            <button onClick={resetWizard} style={{
+              padding: '12px 24px', borderRadius: t.radiusSm, fontSize: 13, fontWeight: 600,
+              background: 'rgba(255,255,255,0.06)', color: t.text2, border: 'none', cursor: 'pointer',
+            }}>Create Another</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
