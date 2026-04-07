@@ -23,11 +23,10 @@ export async function GET(req: NextRequest) {
     const prevSince = subYears(since, 1)
     const prevUntil = subYears(until, 1)
 
-    const [orders, prevYearOrders, customers] = await Promise.all([
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${since.toISOString()}&created_at_max=${until.toISOString()}`, 'orders'),
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSince.toISOString()}&created_at_max=${prevUntil.toISOString()}`, 'orders'),
-      shopifyFetchAll('/customers.json', 'customers'),
-    ])
+    // Fetch sequentially to reduce memory usage
+    const orders = await shopifyFetchAll(`/orders.json?status=any&created_at_min=${since.toISOString()}&created_at_max=${until.toISOString()}`, 'orders')
+    const prevYearOrders = await shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSince.toISOString()}&created_at_max=${prevUntil.toISOString()}`, 'orders')
+    const customers = await shopifyFetchAll('/customers.json', 'customers')
 
     // Daily breakdown
     const dailyMap: Record<string, { orders: number; units: number; revenue: number }> = {}
