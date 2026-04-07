@@ -61,10 +61,10 @@ export async function GET() {
     yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
     yesterdayEnd.setHours(23, 59, 59, 999)
 
-    const [orders, shippedOrders] = await Promise.all([
-      fetchAllPages('/orders?status=awaiting_fulfillment'),
-      fetchAllPages(`/orders?status=shipped&since=${yesterdayStart.toISOString()}&until=${yesterdayEnd.toISOString()}`),
-    ])
+    // Fetch awaiting orders and recently shipped orders
+    // Use updated_at_min to limit shipped orders to recent ones, then filter by shipped_at client-side
+    const orders = await fetchAllPages('/orders?status=awaiting_fulfillment')
+    const shippedOrders = await fetchAllPages(`/orders?status=shipped&updated_at_min=${yesterdayStart.toISOString()}`)
 
     // Ready to ship: non-FBA, Wirral Warehouse, no excluded tags
     const readyToShip = orders.filter((o: any) => {
@@ -83,8 +83,11 @@ export async function GET() {
     }).length
 
     // Shipped yesterday from Wirral Warehouse (non-FBA)
+    // Filter by shipped_at date, not created_at
     const shippedYesterday = shippedOrders.filter((o: any) => {
       if (FBA_TYPES.has(o.channel?.type_code)) return false
+      const shippedAt = o.shipped_at ? new Date(o.shipped_at) : null
+      if (!shippedAt || shippedAt < yesterdayStart || shippedAt > yesterdayEnd) return false
       const warehouses = getOrderWarehouses(o)
       return warehouses.some(w => w === 'Wirral Warehouse')
     }).length
