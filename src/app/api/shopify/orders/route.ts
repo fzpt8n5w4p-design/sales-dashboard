@@ -52,12 +52,11 @@ export async function GET(req: NextRequest) {
     const yoySinceISO = yoySince.toISOString()
     const yoyUntilISO = yoyUntil.toISOString()
 
-    const [orders, prevOrders, yoyOrders, latestOrders] = await Promise.all([
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${sinceISO}&created_at_max=${untilISO}`, 'orders'),
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`, 'orders'),
-      shopifyFetchAll(`/orders.json?status=any&created_at_min=${yoySinceISO}&created_at_max=${yoyUntilISO}`, 'orders'),
-      shopifyFetchAll(`/orders.json?status=any&limit=10`, 'orders', 10),
-    ])
+    // Fetch sequentially to reduce memory usage
+    const orders = await shopifyFetchAll(`/orders.json?status=any&created_at_min=${sinceISO}&created_at_max=${untilISO}`, 'orders')
+    const prevOrders = await shopifyFetchAll(`/orders.json?status=any&created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`, 'orders')
+    const yoyOrders = await shopifyFetchAll(`/orders.json?status=any&created_at_min=${yoySinceISO}&created_at_max=${yoyUntilISO}`, 'orders')
+    const latestOrders = await shopifyFetchAll(`/orders.json?status=any&limit=10`, 'orders', 10)
 
     const isActive = (o: any) => !o.cancelled_at && o.financial_status !== 'voided'
     const activeOrders = orders.filter(isActive)
