@@ -254,29 +254,39 @@ export default function B2BPage() {
       .finally(() => setHistoryLoading(false))
   }, [chartDays])
 
-  // Fetch customers & products once on mount
+  // Lazy-load data per tab — only fetch when tab is active
   useEffect(() => {
-    setCustomersLoading(true)
-    fetch('/api/shopify/customers')
-      .then(r => r.json())
-      .then(d => { if (d.ok) setCustomersData(d) })
-      .catch(() => {})
-      .finally(() => setCustomersLoading(false))
+    if ((tab === 'customers' || tab === 'create-order') && !customersData && !customersLoading) {
+      setCustomersLoading(true)
+      fetch('/api/shopify/customers')
+        .then(r => r.json())
+        .then(d => { if (d.ok) setCustomersData(d) })
+        .catch(() => {})
+        .finally(() => setCustomersLoading(false))
+    }
+  }, [tab, customersData, customersLoading])
 
-    setProductsLoading(true)
-    fetch('/api/shopify/products')
-      .then(r => r.json())
-      .then(d => { if (d.ok) setProductsData(d) })
-      .catch(() => {})
-      .finally(() => setProductsLoading(false))
+  useEffect(() => {
+    if (tab === 'products' && !productsData && !productsLoading) {
+      setProductsLoading(true)
+      fetch('/api/shopify/products')
+        .then(r => r.json())
+        .then(d => { if (d.ok) setProductsData(d) })
+        .catch(() => {})
+        .finally(() => setProductsLoading(false))
+    }
+  }, [tab, productsData, productsLoading])
 
-    setCheckoutsLoading(true)
-    fetch('/api/shopify/checkouts')
-      .then(r => r.json())
-      .then(d => { if (d.ok) setCheckoutsData(d) })
-      .catch(() => {})
-      .finally(() => setCheckoutsLoading(false))
-  }, [])
+  useEffect(() => {
+    if (tab === 'checkouts' && !checkoutsData && !checkoutsLoading) {
+      setCheckoutsLoading(true)
+      fetch('/api/shopify/checkouts')
+        .then(r => r.json())
+        .then(d => { if (d.ok) setCheckoutsData(d) })
+        .catch(() => {})
+        .finally(() => setCheckoutsLoading(false))
+    }
+  }, [tab, checkoutsData, checkoutsLoading])
 
   // Auto-refresh every 60s
   useEffect(() => {
