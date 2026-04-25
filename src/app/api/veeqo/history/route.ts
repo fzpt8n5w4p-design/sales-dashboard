@@ -82,7 +82,7 @@ export async function GET() {
     let totalUnitsSold = 0
     orders.forEach((o: any) => {
       const day = format(new Date(o.created_at), 'yyyy-MM-dd')
-      const items = o.line_items || []
+      const items = Array.isArray(o.line_items) ? o.line_items : []
       let orderUnits = 0
       items.forEach((li: any) => { orderUnits += li.quantity || 1 })
       totalUnitsSold += orderUnits
