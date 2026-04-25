@@ -28,13 +28,18 @@ async function veeqoFetch(path: string, retries = 2): Promise<any> {
   throw new Error('Veeqo rate limited after retries')
 }
 
-// Fetch pages in batches of 3 to avoid rate limits
-async function veeqoFetchAll(basePath: string, maxPages = 50): Promise<any[]> {
+// Stream pages in batches of 3, calling onPage for each. Pages are dropped
+// after processing so peak memory stays bounded by batch size, not by total
+// dataset size. This is the key change for staying under Render's 512MB.
+async function veeqoStreamPages(
+  basePath: string,
+  onPage: (page: any[]) => void,
+  maxPages = 50
+): Promise<void> {
   const sep = basePath.includes('?') ? '&' : '?'
-  let all: any[] = []
   const BATCH = 3
   for (let start = 1; start <= maxPages; start += BATCH) {
-    const batch = []
+    const batch: Promise<any[]>[] = []
     for (let p = start; p < start + BATCH && p <= maxPages; p++) {
       batch.push(
         veeqoFetch(`${basePath}${sep}page_size=100&page=${p}`)
@@ -45,34 +50,143 @@ async function veeqoFetchAll(basePath: string, maxPages = 50): Promise<any[]> {
     let done = false
     for (const page of results) {
       if (page.length === 0) { done = true; break }
-      all = all.concat(page)
+      onPage(page)
       if (page.length < 100) { done = true; break }
     }
     if (done) break
   }
-  return all
 }
 
-// Cache products in memory (they don't change with date range)
-let productCache: { data: any[]; fetchedAt: number } | null = null
-const PRODUCT_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+// Cache the small aggregated stock summary, not the raw products. Raw Veeqo
+// product objects with nested sellables/stock_entries are huge (~50–100MB
+// for a few thousand products) and were a primary OOM culprit.
+type StockSummary = {
+  critical: number
+  low: number
+  healthy: number
+  totalSKUs: number
+  lowStockItems: { name: string; qty: number }[]
+  stockByWarehouse: { name: string; value: number; units: number }[]
+  totalStockValue: number
+}
 
-async function getProducts(): Promise<any[]> {
-  if (productCache && Date.now() - productCache.fetchedAt < PRODUCT_CACHE_TTL) {
-    return productCache.data
+let stockCache: { data: StockSummary; fetchedAt: number } | null = null
+const STOCK_CACHE_TTL = 5 * 60 * 1000
+
+async function getStockSummary(): Promise<StockSummary> {
+  if (stockCache && Date.now() - stockCache.fetchedAt < STOCK_CACHE_TTL) {
+    return stockCache.data
   }
-  const products = await veeqoFetchAll('/products')
-  productCache = { data: products, fetchedAt: Date.now() }
-  return products
+
+  let critical = 0, low = 0, healthy = 0, totalSKUs = 0
+  const lowStockItems: { name: string; qty: number }[] = []
+  const warehouseValueMap: Record<string, { name: string; value: number; units: number }> = {}
+
+  await veeqoStreamPages('/products', (products) => {
+    for (const p of products) {
+      const sellables = p.sellables || p.variants || [p]
+      for (const v of sellables) {
+        const costPrice = parseFloat(v.cost_price || 0) || 0
+        const stockEntries = v.stock_entries || v.warehouses || []
+        let totalQty = 0
+        for (const se of stockEntries) {
+          const phys = se.physical_stock_level ?? 0
+          totalQty += phys
+          const wh = se.warehouse || {}
+          const whName = wh.name || `Warehouse ${wh.id || '?'}`
+          if (!warehouseValueMap[whName]) warehouseValueMap[whName] = { name: whName, value: 0, units: 0 }
+          const entryValue = (se.sellable_on_hand_value && se.sellable_on_hand_value > 0)
+            ? se.sellable_on_hand_value
+            : costPrice * phys
+          warehouseValueMap[whName].value += entryValue
+          warehouseValueMap[whName].units += phys
+        }
+        totalSKUs++
+        if (totalQty < 10) {
+          critical++
+          if (totalQty > 0 && lowStockItems.length < 10) {
+            lowStockItems.push({ name: v.product_title || p.title || v.sku_code || 'Unknown', qty: totalQty })
+          }
+        } else if (totalQty < 50) {
+          low++
+          if (lowStockItems.length < 10) {
+            lowStockItems.push({ name: v.product_title || p.title || v.sku_code || 'Unknown', qty: totalQty })
+          }
+        } else {
+          healthy++
+        }
+      }
+    }
+  })
+
+  const stockByWarehouse = Object.values(warehouseValueMap)
+    .filter(w => w.units > 0 || w.value > 0)
+    .sort((a, b) => b.value - a.value)
+  const totalStockValue = stockByWarehouse.reduce((s, w) => s + w.value, 0)
+
+  const summary: StockSummary = {
+    critical, low, healthy, totalSKUs,
+    lowStockItems, stockByWarehouse, totalStockValue
+  }
+  stockCache = { data: summary, fetchedAt: Date.now() }
+  return summary
 }
 
-function computeOrderMetrics(orders: any[]) {
-  const total = orders.length
-  const revenue = orders.reduce((s: number, o: any) => s + parseFloat(o.total_price || 0), 0)
-  const shipped = orders.filter((o: any) =>
-    o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
-  ).length
-  return { total, revenue, shipped, pending: total - shipped }
+type OrderAggregator = {
+  total: number
+  revenue: number
+  shipped: number
+  readyToShip: number
+  hourly: Record<number, number>
+  channelMap: Record<string, { orders: number; revenue: number }>
+  skuMap: Record<string, { name: string; sku: string; qty: number; revenue: number }>
+  skuByChannel: Record<string, Record<string, { name: string; sku: string; qty: number; revenue: number }>>
+}
+
+const FBA_TYPES = new Set(['amazon_fba'])
+const EXCLUDED_STATUSES = new Set(['shipped', 'cancelled'])
+
+function newOrderAggregator(): OrderAggregator {
+  return {
+    total: 0, revenue: 0, shipped: 0, readyToShip: 0,
+    hourly: {}, channelMap: {}, skuMap: {}, skuByChannel: {}
+  }
+}
+
+function processOrderPage(agg: OrderAggregator, page: any[]) {
+  for (const o of page) {
+    agg.total++
+    const price = parseFloat(o.total_price || 0)
+    agg.revenue += price
+    const isShipped = o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
+    if (isShipped) agg.shipped++
+    if (!FBA_TYPES.has(o.channel?.type_code) && !EXCLUDED_STATUSES.has(o.status)) {
+      agg.readyToShip++
+    }
+    const h = new Date(o.created_at).getHours()
+    agg.hourly[h] = (agg.hourly[h] || 0) + 1
+
+    const chName = o.channel?.name || 'Unknown'
+    if (!agg.channelMap[chName]) agg.channelMap[chName] = { orders: 0, revenue: 0 }
+    agg.channelMap[chName].orders++
+    agg.channelMap[chName].revenue += price
+
+    if (!agg.skuByChannel[chName]) agg.skuByChannel[chName] = {}
+    const items = o.line_items || []
+    for (const li of items) {
+      const s = li.sellable || {}
+      const sku = s.sku_code || 'Unknown'
+      const name = s.product_title || s.title || sku
+      const qty = li.quantity || 1
+      const rev = parseFloat(li.price_per_unit || 0) * qty
+      if (!agg.skuMap[sku]) agg.skuMap[sku] = { name, sku, qty: 0, revenue: 0 }
+      agg.skuMap[sku].qty += qty
+      agg.skuMap[sku].revenue += rev
+      if (!agg.skuByChannel[chName][sku]) agg.skuByChannel[chName][sku] = { name, sku, qty: 0, revenue: 0 }
+      agg.skuByChannel[chName][sku].qty += qty
+      agg.skuByChannel[chName][sku].revenue += rev
+    }
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -108,7 +222,6 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Compute previous period for comparison
     const periodDays = Math.max(1, differenceInDays(until, since) + 1)
     const prevSince = startOfDay(subDays(since, periodDays))
     const prevUntil = endOfDay(subDays(since, 1))
@@ -118,135 +231,77 @@ export async function GET(req: NextRequest) {
     const prevSinceISO = encodeURIComponent(prevSince.toISOString())
     const prevUntilISO = encodeURIComponent(prevUntil.toISOString())
 
-    // Fetch orders, previous orders, products (cached), and pick lists all in parallel
-    const [orders, prevOrders, products, pickLists] = await Promise.all([
-      veeqoFetchAll(`/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`),
-      veeqoFetchAll(`/orders?created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`),
-      getProducts(),
-      veeqoFetchAll(`/pick_lists?created_at_min=${sinceISO}`).catch(() => [])
+    const orderAgg = newOrderAggregator()
+    const prevAgg = { total: 0, revenue: 0 }
+    let pickItems = 0
+    let packItems = 0
+    let pickListCount = 0
+
+    const [, , stock] = await Promise.all([
+      veeqoStreamPages(
+        `/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`,
+        page => processOrderPage(orderAgg, page)
+      ),
+      veeqoStreamPages(
+        `/orders?created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`,
+        page => {
+          for (const o of page) {
+            prevAgg.total++
+            prevAgg.revenue += parseFloat(o.total_price || 0)
+          }
+        }
+      ),
+      getStockSummary(),
+      veeqoStreamPages(
+        `/pick_lists?created_at_min=${sinceISO}`,
+        page => {
+          for (const pl of page) {
+            pickListCount++
+            pickItems += pl.total_items || 0
+            if (pl.status === 'complete') packItems += pl.total_items || 0
+          }
+        }
+      ).catch(() => { /* pick lists optional */ })
     ])
 
-    // Current period metrics
-    const current = computeOrderMetrics(orders)
-    const prev = computeOrderMetrics(prevOrders)
-
-    // Ready to ship: non-FBA orders that haven't shipped yet (eBay, D2C, B2B)
-    const FBA_TYPES = new Set(['amazon_fba'])
-    const SHIPPED_STATUSES = new Set(['shipped'])
-    const EXCLUDED_STATUSES = new Set(['shipped', 'cancelled'])
-    const readyToShip = orders.filter((o: any) =>
-      !FBA_TYPES.has(o.channel?.type_code) && !EXCLUDED_STATUSES.has(o.status)
-    ).length
-
-    // Hourly breakdown (for sparkline)
-    const hourly: Record<number, number> = {}
-    orders.forEach((o: any) => {
-      const h = new Date(o.created_at).getHours()
-      hourly[h] = (hourly[h] || 0) + 1
-    })
-
-    // Channel breakdown (revenue + orders by channel)
-    const channelMap: Record<string, { orders: number; revenue: number }> = {}
-    orders.forEach((o: any) => {
-      const chName = o.channel?.name || 'Unknown'
-      if (!channelMap[chName]) channelMap[chName] = { orders: 0, revenue: 0 }
-      channelMap[chName].orders++
-      channelMap[chName].revenue += parseFloat(o.total_price || 0)
-    })
-    const channels = Object.entries(channelMap)
+    const channels = Object.entries(orderAgg.channelMap)
       .map(([name, data]) => ({ name, orders: data.orders, revenue: data.revenue }))
       .sort((a, b) => b.revenue - a.revenue)
 
-    // SKU breakdown (overall + by channel)
-    const skuMap: Record<string, { name: string; sku: string; qty: number; revenue: number }> = {}
-    const skuByChannel: Record<string, Record<string, { name: string; sku: string; qty: number; revenue: number }>> = {}
-    orders.forEach((o: any) => {
-      const chName = o.channel?.name || 'Unknown'
-      if (!skuByChannel[chName]) skuByChannel[chName] = {}
-      const items = o.line_items || []
-      items.forEach((li: any) => {
-        const s = li.sellable || {}
-        const sku = s.sku_code || 'Unknown'
-        const name = s.product_title || s.title || sku
-        const qty = li.quantity || 1
-        const rev = parseFloat(li.price_per_unit || 0) * qty
-        if (!skuMap[sku]) skuMap[sku] = { name, sku, qty: 0, revenue: 0 }
-        skuMap[sku].qty += qty
-        skuMap[sku].revenue += rev
-        if (!skuByChannel[chName][sku]) skuByChannel[chName][sku] = { name, sku, qty: 0, revenue: 0 }
-        skuByChannel[chName][sku].qty += qty
-        skuByChannel[chName][sku].revenue += rev
-      })
-    })
-    const topSkus = Object.values(skuMap).sort((a, b) => b.qty - a.qty).slice(0, 10)
-    const topSkusByRevenue = Object.values(skuMap).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
-    const totalUnitsSold = Object.values(skuMap).reduce((s, sk) => s + sk.qty, 0)
+    const topSkus = Object.values(orderAgg.skuMap).sort((a, b) => b.qty - a.qty).slice(0, 10)
+    const topSkusByRevenue = Object.values(orderAgg.skuMap).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
+    const totalUnitsSold = Object.values(orderAgg.skuMap).reduce((s, sk) => s + sk.qty, 0)
     const topSkusByChannel: Record<string, { name: string; sku: string; qty: number; revenue: number }[]> = {}
-    for (const [ch, map] of Object.entries(skuByChannel)) {
+    for (const [ch, map] of Object.entries(orderAgg.skuByChannel)) {
       topSkusByChannel[ch] = Object.values(map).sort((a, b) => b.qty - a.qty).slice(0, 5)
     }
 
-    // Stock levels + stock value by warehouse
-    let critical = 0, low = 0, healthy = 0, totalSKUs = 0
-    const lowStockItems: { name: string; qty: number }[] = []
-    const warehouseValueMap: Record<string, { name: string; value: number; units: number }> = {}
-
-    products.forEach((p: any) => {
-      const sellables = p.sellables || p.variants || [p]
-      sellables.forEach((v: any) => {
-        const costPrice = parseFloat(v.cost_price || 0) || 0
-        const stockEntries = v.stock_entries || v.warehouses || []
-
-        let totalQty = 0
-        stockEntries.forEach((se: any) => {
-          const phys = se.physical_stock_level ?? 0
-          totalQty += phys
-          const wh = se.warehouse || {}
-          const whName = wh.name || `Warehouse ${wh.id || '?'}`
-          if (!warehouseValueMap[whName]) warehouseValueMap[whName] = { name: whName, value: 0, units: 0 }
-          const entryValue = (se.sellable_on_hand_value && se.sellable_on_hand_value > 0)
-            ? se.sellable_on_hand_value
-            : costPrice * phys
-          warehouseValueMap[whName].value += entryValue
-          warehouseValueMap[whName].units += phys
-        })
-
-        totalSKUs++
-        if (totalQty < 10) {
-          critical++
-          if (totalQty > 0) lowStockItems.push({ name: v.product_title || p.title || v.sku_code || 'Unknown', qty: totalQty })
-        } else if (totalQty < 50) {
-          low++
-          lowStockItems.push({ name: v.product_title || p.title || v.sku_code || 'Unknown', qty: totalQty })
-        } else {
-          healthy++
-        }
-      })
-    })
-
-    const stockByWarehouse = Object.values(warehouseValueMap)
-      .filter(w => w.units > 0 || w.value > 0)
-      .sort((a, b) => b.value - a.value)
-    const totalStockValue = stockByWarehouse.reduce((s, w) => s + w.value, 0)
-
-    // Pick lists / shift
-    const picks = pickLists.reduce((s: number, pl: any) => s + (pl.total_items || 0), 0)
-    const packs = pickLists.filter((pl: any) => pl.status === 'complete')
-      .reduce((s: number, pl: any) => s + (pl.total_items || 0), 0)
-
     return NextResponse.json({
       ok: true,
-      orders: { total: current.total, shipped: current.shipped, pending: current.pending, revenue: current.revenue, hourly, readyToShip },
-      prevOrders: { total: prev.total, revenue: prev.revenue },
-      stock: { critical, low, healthy, total: totalSKUs, lowItems: lowStockItems.slice(0, 10) },
-      shift: { picks, packs, lists: pickLists.length, errors: 0 },
+      orders: {
+        total: orderAgg.total,
+        shipped: orderAgg.shipped,
+        pending: orderAgg.total - orderAgg.shipped,
+        revenue: orderAgg.revenue,
+        hourly: orderAgg.hourly,
+        readyToShip: orderAgg.readyToShip
+      },
+      prevOrders: { total: prevAgg.total, revenue: prevAgg.revenue },
+      stock: {
+        critical: stock.critical,
+        low: stock.low,
+        healthy: stock.healthy,
+        total: stock.totalSKUs,
+        lowItems: stock.lowStockItems
+      },
+      shift: { picks: pickItems, packs: packItems, lists: pickListCount, errors: 0 },
       channels,
       topSkus,
       topSkusByRevenue,
       totalUnitsSold,
       topSkusByChannel,
-      stockByWarehouse,
-      totalStockValue
+      stockByWarehouse: stock.stockByWarehouse,
+      totalStockValue: stock.totalStockValue
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
