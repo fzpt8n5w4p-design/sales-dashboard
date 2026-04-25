@@ -28,12 +28,18 @@ async function veeqoFetch(path: string, retries = 2): Promise<any> {
   throw new Error('Veeqo rate limited after retries')
 }
 
-async function veeqoFetchAll(basePath: string, maxPages = 20): Promise<any[]> {
+// Stream pages — each page is processed and dropped, so memory stays
+// bounded regardless of total order count. This makes the page cap free
+// in memory terms, so we can raise it without risking OOM.
+async function veeqoStreamPages(
+  basePath: string,
+  onPage: (page: any[]) => void,
+  maxPages = 50
+): Promise<void> {
   const sep = basePath.includes('?') ? '&' : '?'
-  let all: any[] = []
   const BATCH = 3
   for (let start = 1; start <= maxPages; start += BATCH) {
-    const batch = []
+    const batch: Promise<any[]>[] = []
     for (let p = start; p < start + BATCH && p <= maxPages; p++) {
       batch.push(
         veeqoFetch(`${basePath}${sep}page_size=100&page=${p}`)
@@ -44,15 +50,13 @@ async function veeqoFetchAll(basePath: string, maxPages = 20): Promise<any[]> {
     let done = false
     for (const page of results) {
       if (page.length === 0) { done = true; break }
-      all = all.concat(page)
+      onPage(page)
       if (page.length < 100) { done = true; break }
     }
     if (done) break
   }
-  return all
 }
 
-// In-memory cache for the 30-day history (refreshes every 5 minutes)
 let historyCache: { data: any; fetchedAt: number } | null = null
 const CACHE_TTL = 10 * 60 * 1000 // 10 minutes — this is a heavy fetch
 
@@ -68,30 +72,35 @@ export async function GET() {
     const sinceISO = encodeURIComponent(since.toISOString())
     const untilISO = encodeURIComponent(until.toISOString())
 
-    const orders = await veeqoFetchAll(`/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`, 50)
-
-    // Group by day
     const dayMap: Record<string, { orders: number; revenue: number; units: number }> = {}
-
-    // Pre-fill all 30 days so there are no gaps
     for (let i = 29; i >= 0; i--) {
       const day = format(subDays(now, i), 'yyyy-MM-dd')
       dayMap[day] = { orders: 0, revenue: 0, units: 0 }
     }
 
     let totalUnitsSold = 0
-    orders.forEach((o: any) => {
-      const day = format(new Date(o.created_at), 'yyyy-MM-dd')
-      const items = Array.isArray(o.line_items) ? o.line_items : []
-      let orderUnits = 0
-      items.forEach((li: any) => { orderUnits += li.quantity || 1 })
-      totalUnitsSold += orderUnits
-      if (dayMap[day]) {
-        dayMap[day].orders++
-        dayMap[day].revenue += parseFloat(o.total_price || 0)
-        dayMap[day].units += orderUnits
-      }
-    })
+
+    // Cap at 80 pages (8000 orders) — enough for ~265/day average, with
+    // headroom above current peak (~6000/30d). Memory cost is ~3 pages
+    // in flight thanks to streaming.
+    await veeqoStreamPages(
+      `/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`,
+      page => {
+        for (const o of page) {
+          const day = format(new Date(o.created_at), 'yyyy-MM-dd')
+          const items = Array.isArray(o.line_items) ? o.line_items : []
+          let orderUnits = 0
+          for (const li of items) orderUnits += li.quantity || 1
+          totalUnitsSold += orderUnits
+          if (dayMap[day]) {
+            dayMap[day].orders++
+            dayMap[day].revenue += parseFloat(o.total_price || 0)
+            dayMap[day].units += orderUnits
+          }
+        }
+      },
+      80
+    )
 
     const daily = Object.entries(dayMap)
       .sort(([a], [b]) => a.localeCompare(b))
