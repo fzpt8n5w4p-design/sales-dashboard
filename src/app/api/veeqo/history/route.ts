@@ -7,7 +7,7 @@ const VEEQO_BASE = 'https://api.veeqo.com'
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function veeqoFetch(path: string, retries = 2): Promise<any> {
+async function veeqoFetch(path: string, retries = 4): Promise<any> {
   const key = process.env.VEEQO_API_KEY
   if (!key) throw new Error('VEEQO_API_KEY not set')
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -16,7 +16,7 @@ async function veeqoFetch(path: string, retries = 2): Promise<any> {
       cache: 'no-store'
     })
     if (res.status === 429) {
-      await delay(1000 * (attempt + 1))
+      await delay(1000 * Math.pow(2, attempt))
       continue
     }
     if (!res.ok) {
@@ -37,7 +37,7 @@ async function veeqoStreamPages(
   maxPages = 50
 ): Promise<void> {
   const sep = basePath.includes('?') ? '&' : '?'
-  const BATCH = 3
+  const BATCH = 2
   for (let start = 1; start <= maxPages; start += BATCH) {
     const batch: Promise<any[]>[] = []
     for (let p = start; p < start + BATCH && p <= maxPages; p++) {

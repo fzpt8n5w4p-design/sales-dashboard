@@ -7,7 +7,7 @@ const VEEQO_BASE = 'https://api.veeqo.com'
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function veeqoFetch(path: string, retries = 2): Promise<any> {
+async function veeqoFetch(path: string, retries = 4): Promise<any> {
   const key = process.env.VEEQO_API_KEY
   if (!key) throw new Error('VEEQO_API_KEY not set')
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -16,7 +16,9 @@ async function veeqoFetch(path: string, retries = 2): Promise<any> {
       cache: 'no-store'
     })
     if (res.status === 429) {
-      await delay(1000 * (attempt + 1))
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s — total ~31s worst case.
+      // Veeqo's bucket refills slowly under sustained load.
+      await delay(1000 * Math.pow(2, attempt))
       continue
     }
     if (!res.ok) {
@@ -37,7 +39,9 @@ async function veeqoStreamPages(
   maxPages = 50
 ): Promise<void> {
   const sep = basePath.includes('?') ? '&' : '?'
-  const BATCH = 3
+  // BATCH=2 keeps in-stream concurrency low so Veeqo's rate limit isn't
+  // exhausted when the route runs multiple streams sequentially.
+  const BATCH = 2
   for (let start = 1; start <= maxPages; start += BATCH) {
     const batch: Promise<any[]>[] = []
     for (let p = start; p < start + BATCH && p <= maxPages; p++) {
@@ -153,39 +157,37 @@ function newOrderAggregator(): OrderAggregator {
   }
 }
 
-function processOrderPage(agg: OrderAggregator, page: any[]) {
-  for (const o of page) {
-    agg.total++
-    const price = parseFloat(o.total_price || 0)
-    agg.revenue += price
-    const isShipped = o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
-    if (isShipped) agg.shipped++
-    if (!FBA_TYPES.has(o.channel?.type_code) && !EXCLUDED_STATUSES.has(o.status)) {
-      agg.readyToShip++
-    }
-    const h = new Date(o.created_at).getHours()
-    agg.hourly[h] = (agg.hourly[h] || 0) + 1
+function processOrder(agg: OrderAggregator, o: any) {
+  agg.total++
+  const price = parseFloat(o.total_price || 0)
+  agg.revenue += price
+  const isShipped = o.status === 'shipped' || o.fulfillment_status === 'fulfilled'
+  if (isShipped) agg.shipped++
+  if (!FBA_TYPES.has(o.channel?.type_code) && !EXCLUDED_STATUSES.has(o.status)) {
+    agg.readyToShip++
+  }
+  const h = new Date(o.created_at).getHours()
+  agg.hourly[h] = (agg.hourly[h] || 0) + 1
 
-    const chName = o.channel?.name || 'Unknown'
-    if (!agg.channelMap[chName]) agg.channelMap[chName] = { orders: 0, revenue: 0 }
-    agg.channelMap[chName].orders++
-    agg.channelMap[chName].revenue += price
+  const chName = o.channel?.name || 'Unknown'
+  if (!agg.channelMap[chName]) agg.channelMap[chName] = { orders: 0, revenue: 0 }
+  agg.channelMap[chName].orders++
+  agg.channelMap[chName].revenue += price
 
-    if (!agg.skuByChannel[chName]) agg.skuByChannel[chName] = {}
-    const items = o.line_items || []
-    for (const li of items) {
-      const s = li.sellable || {}
-      const sku = s.sku_code || 'Unknown'
-      const name = s.product_title || s.title || sku
-      const qty = li.quantity || 1
-      const rev = parseFloat(li.price_per_unit || 0) * qty
-      if (!agg.skuMap[sku]) agg.skuMap[sku] = { name, sku, qty: 0, revenue: 0 }
-      agg.skuMap[sku].qty += qty
-      agg.skuMap[sku].revenue += rev
-      if (!agg.skuByChannel[chName][sku]) agg.skuByChannel[chName][sku] = { name, sku, qty: 0, revenue: 0 }
-      agg.skuByChannel[chName][sku].qty += qty
-      agg.skuByChannel[chName][sku].revenue += rev
-    }
+  if (!agg.skuByChannel[chName]) agg.skuByChannel[chName] = {}
+  const items = Array.isArray(o.line_items) ? o.line_items : []
+  for (const li of items) {
+    const s = li.sellable || {}
+    const sku = s.sku_code || 'Unknown'
+    const name = s.product_title || s.title || sku
+    const qty = li.quantity || 1
+    const rev = parseFloat(li.price_per_unit || 0) * qty
+    if (!agg.skuMap[sku]) agg.skuMap[sku] = { name, sku, qty: 0, revenue: 0 }
+    agg.skuMap[sku].qty += qty
+    agg.skuMap[sku].revenue += rev
+    if (!agg.skuByChannel[chName][sku]) agg.skuByChannel[chName][sku] = { name, sku, qty: 0, revenue: 0 }
+    agg.skuByChannel[chName][sku].qty += qty
+    agg.skuByChannel[chName][sku].revenue += rev
   }
 }
 
@@ -237,32 +239,47 @@ export async function GET(req: NextRequest) {
     let packItems = 0
     let pickListCount = 0
 
-    const [, , stock] = await Promise.all([
-      veeqoStreamPages(
-        `/orders?created_at_min=${sinceISO}&created_at_max=${untilISO}`,
-        page => processOrderPage(orderAgg, page)
-      ),
-      veeqoStreamPages(
-        `/orders?created_at_min=${prevSinceISO}&created_at_max=${prevUntilISO}`,
-        page => {
-          for (const o of page) {
+    // Veeqo's /orders endpoint silently ignores `created_at_max`, so we
+    // can't ask for a historical window directly. Instead, fetch from
+    // prevSince forward and bucket each order in JS. This also halves
+    // the number of API calls (one stream covers both periods).
+    const sinceMs = since.getTime()
+    const untilMs = until.getTime()
+    const prevSinceMs = prevSince.getTime()
+    const prevUntilMs = prevUntil.getTime()
+
+    // 80 pages × 100/page = 8000 order capacity. At ~200/day volume that
+    // covers ~40 days — full current period for ranges up to 30d, partial
+    // prev period for the 30d range (a Veeqo API limitation: it ignores
+    // created_at_max so we can't fetch a historical window directly).
+    // Anything more pages takes longer than the dashboard tolerates.
+    await veeqoStreamPages(
+      `/orders?created_at_min=${prevSinceISO}`,
+      page => {
+        for (const o of page) {
+          const t = new Date(o.created_at).getTime()
+          if (t >= sinceMs && t <= untilMs) {
+            processOrder(orderAgg, o)
+          } else if (t >= prevSinceMs && t <= prevUntilMs) {
             prevAgg.total++
             prevAgg.revenue += parseFloat(o.total_price || 0)
           }
         }
-      ),
-      getStockSummary(),
-      veeqoStreamPages(
-        `/pick_lists?created_at_min=${sinceISO}`,
-        page => {
-          for (const pl of page) {
-            pickListCount++
-            pickItems += pl.total_items || 0
-            if (pl.status === 'complete') packItems += pl.total_items || 0
-          }
+      },
+      80
+    )
+
+    const stock = await getStockSummary()
+    await veeqoStreamPages(
+      `/pick_lists?created_at_min=${sinceISO}`,
+      page => {
+        for (const pl of page) {
+          pickListCount++
+          pickItems += pl.total_items || 0
+          if (pl.status === 'complete') packItems += pl.total_items || 0
         }
-      ).catch(() => { /* pick lists optional */ })
-    ])
+      }
+    ).catch(() => { /* pick lists optional */ })
 
     const channels = Object.entries(orderAgg.channelMap)
       .map(([name, data]) => ({ name, orders: data.orders, revenue: data.revenue }))
