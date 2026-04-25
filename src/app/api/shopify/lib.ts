@@ -74,3 +74,43 @@ export async function shopifyFetchAll(basePath: string, resourceKey: string, max
   }
   return all
 }
+
+// Streaming variant: invokes onPage for each page (deduplicated by id) and
+// drops the page after. Lets callers aggregate without holding the full
+// dataset in memory — required for staying under Render's 512MB tier.
+export async function shopifyStreamPages(
+  basePath: string,
+  resourceKey: string,
+  onPage: (items: any[]) => void,
+  maxPages = 20
+): Promise<void> {
+  const base = getShopifyBase()
+  const seen = new Set<number>()
+  const hasLimit = basePath.includes('limit=')
+  let url: string | null = hasLimit
+    ? `${base}${basePath}`
+    : `${base}${basePath.includes('?') ? `${basePath}&limit=250` : `${basePath}?limit=250`}`
+
+  for (let page = 0; page < maxPages && url; page++) {
+    const res = await shopifyRawFetch(url)
+    const data = await res.json()
+    const items = data[resourceKey]
+    if (!Array.isArray(items) || items.length === 0) break
+
+    const fresh: any[] = []
+    for (const item of items) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id)
+        fresh.push(item)
+      }
+    }
+    if (fresh.length > 0) onPage(fresh)
+
+    if (items.length < 250) break
+
+    url = parseLinkHeader(res.headers.get('Link'))
+    if (!url) break
+
+    await delay(500)
+  }
+}
