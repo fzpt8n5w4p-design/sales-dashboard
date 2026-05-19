@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react'
 import { Responsive, WidthProvider } from 'react-grid-layout'
 import Nav from './components/Nav'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts'
@@ -93,6 +93,95 @@ const rawFmtRev = (n?: number) => n != null ? CUR + rawFmt(n) : '--'
 const pct = (a: number, b: number) => b ? ((a / b) * 100).toFixed(1) + '%' : '--'
 
 // Display-aware helpers — all widgets should use these
+// ─── Hoax-mode merging: fold Amazon FBA into DC - ridecore.pro ────────────────
+const isAmazonChannel = (name: string) => name.toLowerCase().includes('amazon')
+const isDcChannel = (name: string) => {
+  const n = name.toLowerCase()
+  return n.startsWith('dc') || (n.includes('ridecore.pro') && !n.includes('b2b'))
+}
+
+function mergeAmazonChannels(channels: ChannelBreakdown[]): ChannelBreakdown[] {
+  let amazonOrders = 0
+  let amazonRevenue = 0
+  let amazonName = ''
+  const rest: ChannelBreakdown[] = []
+  for (const ch of channels) {
+    if (isAmazonChannel(ch.name)) {
+      amazonOrders += ch.orders
+      amazonRevenue += ch.revenue
+      amazonName = amazonName || ch.name
+    } else {
+      rest.push({ ...ch })
+    }
+  }
+  if (!amazonName) return rest
+  const dcIdx = rest.findIndex(c => isDcChannel(c.name))
+  if (dcIdx >= 0) {
+    rest[dcIdx] = { ...rest[dcIdx], orders: rest[dcIdx].orders + amazonOrders, revenue: rest[dcIdx].revenue + amazonRevenue }
+  } else {
+    rest.push({ name: 'DC - ridecore.pro', orders: amazonOrders, revenue: amazonRevenue })
+  }
+  return rest
+}
+
+function mergeAmazonSkuMap(byChannel: Record<string, SkuBreakdown[]>): Record<string, SkuBreakdown[]> {
+  const result: Record<string, SkuBreakdown[]> = {}
+  let amazonSkus: SkuBreakdown[] = []
+  for (const [name, skus] of Object.entries(byChannel)) {
+    if (isAmazonChannel(name)) {
+      amazonSkus = amazonSkus.concat(skus)
+    } else {
+      result[name] = skus
+    }
+  }
+  if (!amazonSkus.length) return result
+  const dcKey = Object.keys(result).find(isDcChannel) || 'DC - ridecore.pro'
+  const map = new Map<string, SkuBreakdown>()
+  for (const s of [...(result[dcKey] || []), ...amazonSkus]) {
+    const key = s.sku || s.name
+    const existing = map.get(key)
+    if (existing) {
+      map.set(key, { ...existing, qty: existing.qty + s.qty, revenue: existing.revenue + s.revenue })
+    } else {
+      map.set(key, { ...s })
+    }
+  }
+  result[dcKey] = Array.from(map.values()).sort((a, b) => b.qty - a.qty)
+  return result
+}
+
+function mergeAmazonCancellations(channels: CancellationChannel[]): CancellationChannel[] {
+  let amazonCount = 0
+  let amazonValue = 0
+  let amazonSeen = false
+  const rest: CancellationChannel[] = []
+  for (const ch of channels) {
+    if (isAmazonChannel(ch.name)) {
+      amazonCount += ch.count
+      amazonValue += ch.value
+      amazonSeen = true
+    } else {
+      rest.push({ ...ch })
+    }
+  }
+  if (!amazonSeen) return rest
+  const dcIdx = rest.findIndex(c => isDcChannel(c.name))
+  if (dcIdx >= 0) {
+    rest[dcIdx] = { ...rest[dcIdx], count: rest[dcIdx].count + amazonCount, value: rest[dcIdx].value + amazonValue }
+  } else {
+    rest.push({ name: 'DC - ridecore.pro', count: amazonCount, value: amazonValue })
+  }
+  return rest
+}
+
+function transformVeeqoForHoax(data: VeeqoData): VeeqoData {
+  return {
+    ...data,
+    channels: mergeAmazonChannels(data.channels),
+    topSkusByChannel: mergeAmazonSkuMap(data.topSkusByChannel),
+  }
+}
+
 // ─── Order Ding Sound ─────────────────────────────────────────────────────────
 function playDing() {
   try {
@@ -939,21 +1028,22 @@ function SheetsWidget({ data, loading }: { data?: SheetsData; loading: boolean }
   )
 }
 
-function ReturnsWidget({ amazon, ebay, loading }: { amazon?: AmazonData; ebay?: EbayData; loading: boolean }) {
+function ReturnsWidget({ amazon, ebay, hideAmazon, loading }: { amazon?: AmazonData; ebay?: EbayData; hideAmazon?: boolean; loading: boolean }) {
   const { fmt } = useDisplayFmt()
   const showShimmer = loading && !amazon && !ebay
-  const rows = [
-    { ch: 'Amazon UK', returns: 0, cancels: amazon?.returns.cancelled ?? 0 },
-    { ch: 'eBay UK', returns: ebay?.returns.returns ?? 0, cancels: ebay?.returns.cancelled ?? 0 },
+  const allRows = [
+    { ch: 'Amazon UK', returns: 0, cancels: amazon?.returns.cancelled ?? 0, isAmazon: true },
+    { ch: 'eBay UK', returns: ebay?.returns.returns ?? 0, cancels: ebay?.returns.cancelled ?? 0, isAmazon: false },
   ]
-  const totalOrders = (amazon?.orders.total ?? 0) + (ebay?.orders.total ?? 0)
+  const rows = allRows.filter(r => !(hideAmazon && r.isAmazon))
+  const totalOrders = (hideAmazon ? 0 : (amazon?.orders.total ?? 0)) + (ebay?.orders.total ?? 0)
   const totalReturns = rows.reduce((s, r) => s + r.returns, 0)
   const returnRate = totalOrders ? ((totalReturns / totalOrders) * 100).toFixed(1) : '--'
 
   return (
     <Card tileId="returns">
       <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
-        <SourceTag label="Amazon" colour={sourceColours.amazon} />
+        {!hideAmazon && <SourceTag label="Amazon" colour={sourceColours.amazon} />}
         <SourceTag label="eBay" colour={sourceColours.ebay} />
       </div>
       <SectionTitle>Returns & Cancellations</SectionTitle>
@@ -1458,7 +1548,7 @@ export default function Dashboard() {
   const [muted, setMuted] = useState(false)
   const mutedRef = useRef(false)
   const [hoaxMode, setHoaxMode] = useState(false)
-  const multiplier = hoaxMode ? 3 : 1
+  const multiplier = hoaxMode ? 2 : 1
   const [hiddenTiles, setHiddenTiles] = useState<Set<string>>(new Set())
   useEffect(() => {
     try {
@@ -1476,6 +1566,16 @@ export default function Dashboard() {
   }
   const fetchAllRef = useRef<() => void>(() => {})
   const prevOrderCount = useRef<number | null>(null)
+
+  // Hoax mode: merge Amazon into DC - ridecore.pro and hide Amazon-only data
+  const effectiveVeeqoData = useMemo(
+    () => (hoaxMode && veeqoData ? transformVeeqoForHoax(veeqoData) : veeqoData),
+    [hoaxMode, veeqoData]
+  )
+  const effectiveCancellations = useMemo(
+    () => (hoaxMode && cancellations ? { ...cancellations, channels: mergeAmazonCancellations(cancellations.channels) } : cancellations),
+    [hoaxMode, cancellations]
+  )
 
   const setStatus = (key: string, s: ApiStatus) =>
     setStatuses(prev => ({ ...prev, [key]: s }))
@@ -1711,7 +1811,7 @@ export default function Dashboard() {
             background: hoaxMode ? `linear-gradient(135deg, ${t.purple}30, ${t.blue}30)` : 'rgba(255,255,255,0.06)',
             color: hoaxMode ? t.purple : t.text3,
             border: hoaxMode ? `1px solid ${t.purple}40` : 'none',
-          }} title="Triple all numbers for presentations">
+          }} title="Double all numbers and hide Amazon for presentations">
             {hoaxMode ? 'Hoax ON' : 'Hoax'}
           </button>
 
@@ -1741,7 +1841,7 @@ export default function Dashboard() {
       >
         <div key="veeqo-orders">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoOrdersWidget data={veeqoData} loading={isLoading('veeqo')} range={range} />
+          <VeeqoOrdersWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} range={range} />
         </div>
         <div key="ready-to-ship">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
@@ -1753,11 +1853,11 @@ export default function Dashboard() {
         </div>
         <div key="veeqo-channels">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoChannelsWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoChannelsWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-orders-by-ch">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoOrdersByChannelWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoOrdersByChannelWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="history-chart">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
@@ -1765,36 +1865,38 @@ export default function Dashboard() {
         </div>
         <div key="veeqo-shift">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoShiftWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoShiftWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="units-sold">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <UnitsSoldWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <UnitsSoldWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-top-skus">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoTopSkusWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoTopSkusWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-top-skus-rev">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoTopSkusByRevenueWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoTopSkusByRevenueWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-skus-by-ch">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoTopSkusByChannelWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoTopSkusByChannelWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-stock">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoStockWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoStockWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
         <div key="veeqo-stock-value">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <VeeqoStockValueWidget data={veeqoData} loading={isLoading('veeqo')} />
+          <VeeqoStockValueWidget data={effectiveVeeqoData} loading={isLoading('veeqo')} />
         </div>
-        <div key="amazon">
-          <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <AmazonWidget data={amazonData} loading={isLoading('amazon')} />
-        </div>
+        {!hoaxMode && (
+          <div key="amazon">
+            <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
+            <AmazonWidget data={amazonData} loading={isLoading('amazon')} />
+          </div>
+        )}
         <div key="shipping">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
           <ShippingWidget data={shippingData} loading={shippingLoading} />
@@ -1805,7 +1907,7 @@ export default function Dashboard() {
         </div>
         <div key="cancellations">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <CancellationsWidget data={cancellations} loading={cancellationsLoading} />
+          <CancellationsWidget data={effectiveCancellations} loading={cancellationsLoading} />
         </div>
         <div key="ebay">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
@@ -1813,7 +1915,7 @@ export default function Dashboard() {
         </div>
         <div key="returns">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
-          <ReturnsWidget amazon={amazonData} ebay={ebayData} loading={isLoading('amazon') || isLoading('ebay')} />
+          <ReturnsWidget amazon={amazonData} ebay={ebayData} hideAmazon={hoaxMode} loading={isLoading('amazon') || isLoading('ebay')} />
         </div>
         <div key="sheets">
           <div className="drag-handle" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 30, zIndex: 1 }} />
