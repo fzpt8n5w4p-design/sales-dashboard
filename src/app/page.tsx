@@ -174,11 +174,36 @@ function mergeAmazonCancellations(channels: CancellationChannel[]): Cancellation
   return rest
 }
 
+function mergeAmazonWarehouses(warehouses: WarehouseStock[]): WarehouseStock[] {
+  let amazonValue = 0
+  let amazonUnits = 0
+  let amazonSeen = false
+  const rest: WarehouseStock[] = []
+  for (const wh of warehouses) {
+    if (isAmazonChannel(wh.name)) {
+      amazonValue += wh.value
+      amazonUnits += wh.units
+      amazonSeen = true
+    } else {
+      rest.push({ ...wh })
+    }
+  }
+  if (!amazonSeen) return rest
+  const wirralIdx = rest.findIndex(w => w.name.toLowerCase().includes('wirral'))
+  if (wirralIdx >= 0) {
+    rest[wirralIdx] = { ...rest[wirralIdx], value: rest[wirralIdx].value + amazonValue, units: rest[wirralIdx].units + amazonUnits }
+  } else {
+    rest.push({ name: 'Wirral Warehouse', value: amazonValue, units: amazonUnits })
+  }
+  return rest
+}
+
 function transformVeeqoForHoax(data: VeeqoData): VeeqoData {
   return {
     ...data,
     channels: mergeAmazonChannels(data.channels),
     topSkusByChannel: mergeAmazonSkuMap(data.topSkusByChannel),
+    stockByWarehouse: mergeAmazonWarehouses(data.stockByWarehouse),
   }
 }
 
@@ -1812,7 +1837,7 @@ export default function Dashboard() {
             color: hoaxMode ? t.purple : t.text3,
             border: hoaxMode ? `1px solid ${t.purple}40` : 'none',
           }} title="Double all numbers and hide Amazon for presentations">
-            {hoaxMode ? 'Hoax ON' : 'Hoax'}
+            {hoaxMode ? 'Hx ON' : 'Hx'}
           </button>
 
           <button onClick={() => setFetchKey(k => k + 1)} style={{
