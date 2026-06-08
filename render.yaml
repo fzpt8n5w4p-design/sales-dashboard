@@ -35,3 +35,9 @@ services:
         value: "£"
       - key: NEXT_PUBLIC_REFRESH_INTERVAL
         value: "60"
+      # Live View globe — arc destination (your main warehouse). Optional;
+      # defaults to a central-UK point if unset.
+      - key: WAREHOUSE_LAT
+        sync: false
+      - key: WAREHOUSE_LNG
+        sync: false

@@ -11,6 +11,7 @@ interface NavItem {
 }
 
 const navLinks: NavItem[] = [
+  { label: 'Live View', href: '/live' },
   { label: 'Main Ops Dashboard', href: '/' },
   {
     label: 'B2B Dashboard',
