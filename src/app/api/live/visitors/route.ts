@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { GoogleAuth } from 'google-auth-library'
+import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { geocode } from '../geo'
 
 export const dynamic = 'force-dynamic'
@@ -8,36 +8,63 @@ export const dynamic = 'force-dynamic'
 // ~30 min), broken down by city so they can ping the globe. Covers the Shopify
 // storefront(s) only — marketplaces (Amazon/eBay) expose no visitor data.
 //
-// Config (Render env): GA4_PROPERTY_ID (numeric) + GA4_SERVICE_ACCOUNT_JSON
-// (the service-account key JSON, pasted whole). Unconfigured → graceful no-op so
-// the page still works without it.
+// Two auth modes (whichever is configured wins; OAuth first):
+//   OAuth (recommended here — the GA4 property's Workspace org blocks external
+//     service accounts): GA4_REFRESH_TOKEN authenticated as a user who already
+//     has GA access, plus an OAuth client id/secret (reuses GOOGLE_ADS_* if no
+//     GA4-specific one is set).
+//   Service account: GA4_SERVICE_ACCOUNT_JSON (the key JSON pasted whole) — only
+//     works if the service-account email can be added as a Viewer on the property.
+// Unconfigured → graceful no-op so the page still works without it.
 
 const SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
 
-// Cache the auth client across requests so we don't re-sign a JWT every poll.
-let authClient: GoogleAuth | null = null
-function getAuth(): GoogleAuth | null {
+let oauthClient: OAuth2Client | null = null
+let saClient: GoogleAuth | null = null
+
+// Returns a GA4 access token from whichever auth mode is configured, or null.
+async function getAccessToken(): Promise<string | null> {
+  const refresh = process.env.GA4_REFRESH_TOKEN
+  const clientId = process.env.GA4_OAUTH_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID
+  const clientSecret = process.env.GA4_OAUTH_CLIENT_SECRET || process.env.GOOGLE_ADS_CLIENT_SECRET
+
+  if (refresh && clientId && clientSecret) {
+    if (!oauthClient) {
+      oauthClient = new OAuth2Client(clientId, clientSecret)
+      oauthClient.setCredentials({ refresh_token: refresh })
+    }
+    const { token } = await oauthClient.getAccessToken()
+    return token || null
+  }
+
   const raw = process.env.GA4_SERVICE_ACCOUNT_JSON
-  if (!raw) return null
-  if (authClient) return authClient
-  const creds = JSON.parse(raw)
-  // Env vars often store the private key with escaped newlines; restore them.
-  if (creds.private_key) creds.private_key = creds.private_key.replace(/\\n/g, '\n')
-  authClient = new GoogleAuth({ credentials: creds, scopes: [SCOPE] })
-  return authClient
+  if (raw) {
+    if (!saClient) {
+      const creds = JSON.parse(raw)
+      // Env vars often store the private key with escaped newlines; restore them.
+      if (creds.private_key) creds.private_key = creds.private_key.replace(/\\n/g, '\n')
+      saClient = new GoogleAuth({ credentials: creds, scopes: [SCOPE] })
+    }
+    const client = await saClient.getClient()
+    return (await client.getAccessToken()).token || null
+  }
+
+  return null
 }
 
 export async function GET() {
   // ridecore.pro GA4 property; override per deployment via GA4_PROPERTY_ID.
   const propertyId = process.env.GA4_PROPERTY_ID || '328365624'
-  const auth = getAuth()
-  if (!propertyId || !auth) {
+  const hasAuth =
+    (process.env.GA4_REFRESH_TOKEN &&
+      (process.env.GA4_OAUTH_CLIENT_ID || process.env.GOOGLE_ADS_CLIENT_ID)) ||
+    process.env.GA4_SERVICE_ACCOUNT_JSON
+  if (!propertyId || !hasAuth) {
     return NextResponse.json({ ok: true, configured: false, total: 0, pings: [] })
   }
 
   try {
-    const client = await auth.getClient()
-    const token = (await client.getAccessToken()).token
+    const token = await getAccessToken()
     if (!token) throw new Error('Failed to obtain GA4 access token')
 
     const res = await fetch(

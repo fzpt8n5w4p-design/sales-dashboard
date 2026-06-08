@@ -48,3 +48,12 @@ services:
         sync: false
       - key: GA4_SERVICE_ACCOUNT_JSON
         sync: false
+      # OAuth alternative (used when the GA4 property's org blocks service
+      # accounts). Refresh token for a user with GA access; client id/secret
+      # fall back to the GOOGLE_ADS_* pair if these aren't set.
+      - key: GA4_REFRESH_TOKEN
+        sync: false
+      - key: GA4_OAUTH_CLIENT_ID
+        sync: false
+      - key: GA4_OAUTH_CLIENT_SECRET
+        sync: false
