@@ -117,11 +117,23 @@ export async function GET(req: NextRequest) {
       LIMIT 10
     `
 
-    // GOOGLE_ADS_CUSTOMER_ID is the manager (MCC), which can't report metrics —
-    // so report the specific ridecore client account, with the manager sent as
-    // login-customer-id. Override the client via GOOGLE_ADS_REPORT_CUSTOMER_ID.
-    const reportId = (process.env.GOOGLE_ADS_REPORT_CUSTOMER_ID || '9683657843').replace(/-/g, '')
-    const targets = [reportId]
+    // GOOGLE_ADS_CUSTOMER_ID (968-365-7843) is a manager (MCC) — metrics can't
+    // be queried on a manager, only its clients. Discover the enabled,
+    // non-manager client accounts under it and aggregate their metrics.
+    let targets: string[] = []
+    try {
+      const clientRows = await queryGoogleAds(
+        token,
+        configuredId,
+        `SELECT customer_client.id FROM customer_client WHERE customer_client.manager = false AND customer_client.status = 'ENABLED'`,
+        loginId
+      )
+      const ids: string[] = clientRows
+        .map((r: any) => String(r.customerClient?.id || ''))
+        .filter((x: string) => x && x !== 'undefined')
+      targets = Array.from(new Set(ids)).slice(0, 15)
+    } catch { /* not a manager / no hierarchy access — fall back below */ }
+    if (targets.length === 0) targets = [configuredId]
 
     // Pull metrics from each client account and aggregate.
     let impressions = 0, clicks = 0, costMicros = 0, conversions = 0, convValue = 0
