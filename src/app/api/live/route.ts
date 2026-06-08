@@ -11,13 +11,13 @@ export const dynamic = 'force-dynamic'
 
 const MAX_PINGS = 300
 
-// Arc destination on the globe. Defaults to a central-UK point; override per
-// deployment via WAREHOUSE_LAT / WAREHOUSE_LNG.
+// Arc destination on the globe — the Wirral warehouse. Override per deployment
+// via WAREHOUSE_LAT / WAREHOUSE_LNG if the exact site differs.
 function warehouseCoords() {
   const lat = parseFloat(process.env.WAREHOUSE_LAT || '')
   const lng = parseFloat(process.env.WAREHOUSE_LNG || '')
   if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng }
-  return { lat: 52.4862, lng: -1.8904 } // Birmingham, UK (central default)
+  return { lat: 53.3727, lng: -3.0738 } // Wirral, Merseyside, UK
 }
 
 type Ping = {

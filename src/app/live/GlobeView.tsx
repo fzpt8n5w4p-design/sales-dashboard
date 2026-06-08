@@ -23,21 +23,28 @@ interface Props {
   points: GlobePoint[]
   rings: GlobeRing[]
   arcs: GlobeArc[]
+  focus: { lat: number; lng: number; altitude: number }
 }
 
-export default function GlobeView({ width, height, points, rings, arcs }: Props) {
+export default function GlobeView({ width, height, points, rings, arcs, focus }: Props) {
   const globeEl = useRef<any>(null)
 
   useEffect(() => {
     const g = globeEl.current
     if (!g) return
     const controls = g.controls()
-    controls.autoRotate = true
-    controls.autoRotateSpeed = 0.4
+    // No auto-rotate: keep the camera parked on where orders are happening
+    // rather than drifting off to empty ocean. User can still drag/zoom.
+    controls.autoRotate = false
     controls.enableZoom = true
-    // Frame on the UK/EU (primary market) at a comfortable distance.
-    g.pointOfView({ lat: 35, lng: -5, altitude: 2.2 }, 0)
   }, [])
+
+  // Pan + zoom to frame the live order region whenever it changes.
+  useEffect(() => {
+    const g = globeEl.current
+    if (!g) return
+    g.pointOfView({ lat: focus.lat, lng: focus.lng, altitude: focus.altitude }, 1200)
+  }, [focus.lat, focus.lng, focus.altitude])
 
   return (
     <Globe

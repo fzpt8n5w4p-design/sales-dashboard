@@ -47,22 +47,49 @@ interface LiveData {
 }
 
 // ─── Channel colours (match arcs/rings to the legend) ───────────────────────
-const PALETTE = [t.blue, t.green, t.orange, t.purple, t.teal, t.pink, t.yellow]
-const KNOWN: Record<string, string> = {
-  amazon: t.orange,
-  ebay: t.blue,
-  shopify: t.green,
-}
-const channelColorCache: Record<string, string> = {}
+// Each channel gets a distinct colour. Brand names claim a recognisable hue if
+// it's still free; everyone else takes the next unused palette colour. First
+// assignment is cached so colours stay stable across polls.
+const t2 = { red: '#FF453A', indigo: '#5E5CE6', mint: '#66D4CF', brown: '#AC8E68' }
+const BRAND: Record<string, string> = { amazon: t.orange, ebay: t.blue }
+const PALETTE = [
+  t.green, t.purple, t.teal, t.pink, t.yellow,
+  t2.indigo, t2.mint, t2.red, t2.brown, t.orange, t.blue,
+]
+const assigned: Record<string, string> = {}
+const usedColors = new Set<string>()
 function channelColor(name: string): string {
+  if (assigned[name]) return assigned[name]
   const key = name.toLowerCase()
-  for (const k in KNOWN) if (key.includes(k)) return KNOWN[k]
-  if (channelColorCache[name]) return channelColorCache[name]
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  const c = PALETTE[h % PALETTE.length]
-  channelColorCache[name] = c
-  return c
+  let chosen: string | undefined
+  for (const b in BRAND) {
+    if (key.includes(b) && !usedColors.has(BRAND[b])) { chosen = BRAND[b]; break }
+  }
+  if (!chosen) chosen = PALETTE.find(c => !usedColors.has(c))
+  if (!chosen) {
+    // More channels than distinct colours — fall back deterministically.
+    let h = 0
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+    chosen = PALETTE[h % PALETTE.length]
+  }
+  assigned[name] = chosen
+  usedColors.add(chosen)
+  return chosen
+}
+
+// Compute a camera focus that frames where today's orders actually are, so the
+// globe zooms to the UK/EU instead of showing empty oceans. Uses mean centre +
+// average deviation so a lone far-flung order doesn't yank the view out.
+function computeFocus(pings: Ping[]): { lat: number; lng: number; altitude: number } {
+  if (!pings.length) return { lat: 54, lng: -2.5, altitude: 1.4 }
+  let sLat = 0, sLng = 0
+  for (const p of pings) { sLat += p.lat; sLng += p.lng }
+  const mLat = sLat / pings.length, mLng = sLng / pings.length
+  let dLat = 0, dLng = 0
+  for (const p of pings) { dLat += Math.abs(p.lat - mLat); dLng += Math.abs(p.lng - mLng) }
+  const spread = Math.max(dLat / pings.length, dLng / pings.length) * 2.5
+  const altitude = Math.min(2.5, Math.max(0.45, spread / 30 + 0.4))
+  return { lat: mLat, lng: mLng, altitude }
 }
 
 const fmtMoney = (n: number) =>
@@ -77,6 +104,7 @@ export default function LivePage() {
   const [error, setError] = useState<string | null>(null)
   const [dims, setDims] = useState({ w: 0, h: 0 })
   const [lastOrder, setLastOrder] = useState<Ping | null>(null)
+  const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.4 })
 
   const seen = useRef<Set<string>>(new Set())
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
@@ -109,6 +137,9 @@ export default function LivePage() {
       warehouse.current = json.warehouse
       setStats(json.stats)
       setMeta({ fetchedAt: json.fetchedAt })
+      // Assign colours biggest-channel-first so the legend ordering is stable.
+      json.stats.byChannel.forEach(c => channelColor(c.name))
+      setFocus(computeFocus(json.pings))
       setPoints(json.pings.map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) })))
 
       if (isFirst) {
@@ -151,7 +182,7 @@ export default function LivePage() {
       {/* Globe fills the viewport behind the overlays */}
       <div style={{ position: 'absolute', inset: 0 }}>
         {dims.w > 0 && (
-          <GlobeView width={dims.w} height={dims.h} points={points} rings={rings} arcs={arcs} />
+          <GlobeView width={dims.w} height={dims.h} points={points} rings={rings} arcs={arcs} focus={focus} />
         )}
       </div>
 
