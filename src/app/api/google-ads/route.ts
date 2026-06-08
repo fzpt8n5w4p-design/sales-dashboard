@@ -20,7 +20,7 @@ async function getAccessToken() {
   return data.access_token as string
 }
 
-async function queryGoogleAds(token: string, customerId: string, query: string) {
+async function queryGoogleAds(token: string, customerId: string, query: string, loginCustomerId?: string) {
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${token}`,
     'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
@@ -28,7 +28,7 @@ async function queryGoogleAds(token: string, customerId: string, query: string) 
   }
   // When the client account sits under a manager (MCC), the manager ID must be
   // sent as login-customer-id while the URL targets the client account.
-  const loginId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '')
+  const loginId = (loginCustomerId || process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').replace(/-/g, '')
   if (loginId) headers['login-customer-id'] = loginId
 
   const res = await fetch(
@@ -59,7 +59,10 @@ export async function GET(req: NextRequest) {
   const range = searchParams.get('range') || 'today'
   const customSince = searchParams.get('since')
   const customUntil = searchParams.get('until')
-  const customerId = process.env.GOOGLE_ADS_CUSTOMER_ID!.replace(/-/g, '')
+  const configuredId = process.env.GOOGLE_ADS_CUSTOMER_ID!.replace(/-/g, '')
+  // login-customer-id for all calls: an explicit manager if set, else the
+  // configured account (works whether it's a manager or a standalone client).
+  const loginId = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || configuredId).replace(/-/g, '')
 
   try {
     const now = new Date()
@@ -114,21 +117,54 @@ export async function GET(req: NextRequest) {
       LIMIT 10
     `
 
-    const [accountRows, campaignRows] = await Promise.all([
-      queryGoogleAds(token, customerId, accountQuery),
-      queryGoogleAds(token, customerId, campaignQuery),
-    ])
+    // Metrics can't be queried on a manager (MCC) account — only its clients.
+    // Discover the enabled, non-manager client accounts under the configured
+    // account (for a standalone client this returns just itself).
+    let targets: string[] = []
+    try {
+      const clientRows = await queryGoogleAds(
+        token,
+        configuredId,
+        `SELECT customer_client.id FROM customer_client WHERE customer_client.manager = false AND customer_client.status = 'ENABLED'`,
+        loginId
+      )
+      const ids: string[] = clientRows
+        .map((r: any) => String(r.customerClient?.id || ''))
+        .filter((x: string) => x && x !== 'undefined')
+      targets = Array.from(new Set(ids)).slice(0, 15)
+    } catch { /* not a manager / no hierarchy access — fall back below */ }
+    if (targets.length === 0) targets = [configuredId]
 
-    // Aggregate account metrics (may be multiple rows for date segments)
+    // Pull metrics from each client account and aggregate.
     let impressions = 0, clicks = 0, costMicros = 0, conversions = 0, convValue = 0
-    accountRows.forEach((r: any) => {
-      const m = r.metrics || {}
-      impressions += parseInt(m.impressions || 0)
-      clicks += parseInt(m.clicks || 0)
-      costMicros += parseInt(m.costMicros || 0)
-      conversions += parseFloat(m.conversions || 0)
-      convValue += parseFloat(m.conversionsValue || 0)
-    })
+    const campaignMap: Record<string, { name: string; status: string; impressions: number; clicks: number; spend: number; conversions: number; convValue: number }> = {}
+
+    for (const cid of targets) {
+      const [accountRows, campaignRows] = await Promise.all([
+        queryGoogleAds(token, cid, accountQuery, loginId),
+        queryGoogleAds(token, cid, campaignQuery, loginId),
+      ])
+      accountRows.forEach((r: any) => {
+        const m = r.metrics || {}
+        impressions += parseInt(m.impressions || 0)
+        clicks += parseInt(m.clicks || 0)
+        costMicros += parseInt(m.costMicros || 0)
+        conversions += parseFloat(m.conversions || 0)
+        convValue += parseFloat(m.conversionsValue || 0)
+      })
+      campaignRows.forEach((r: any) => {
+        const m = r.metrics || {}
+        const c = r.campaign || {}
+        const name = c.name || 'Unknown'
+        if (!campaignMap[name]) campaignMap[name] = { name, status: c.status || 'UNKNOWN', impressions: 0, clicks: 0, spend: 0, conversions: 0, convValue: 0 }
+        const e = campaignMap[name]
+        e.impressions += parseInt(m.impressions || 0)
+        e.clicks += parseInt(m.clicks || 0)
+        e.spend += parseInt(m.costMicros || 0) / 1_000_000
+        e.conversions += parseFloat(m.conversions || 0)
+        e.convValue += parseFloat(m.conversionsValue || 0)
+      })
+    }
 
     const spend = costMicros / 1_000_000
     const ctr = impressions ? (clicks / impressions) * 100 : 0
@@ -136,23 +172,11 @@ export async function GET(req: NextRequest) {
     const costPerConv = conversions ? spend / conversions : 0
     const roas = spend ? convValue / spend : 0
 
-    // Campaign breakdown
-    const campaigns = campaignRows.map((r: any) => {
-      const m = r.metrics || {}
-      const c = r.campaign || {}
-      const campCost = parseInt(m.costMicros || 0) / 1_000_000
-      const campConv = parseFloat(m.conversions || 0)
-      return {
-        name: c.name || 'Unknown',
-        status: c.status || 'UNKNOWN',
-        impressions: parseInt(m.impressions || 0),
-        clicks: parseInt(m.clicks || 0),
-        spend: campCost,
-        conversions: campConv,
-        convValue: parseFloat(m.conversionsValue || 0),
-        roas: campCost ? parseFloat(m.conversionsValue || 0) / campCost : 0,
-      }
-    }).filter((c: any) => c.impressions > 0 || c.clicks > 0 || c.spend > 0)
+    const campaigns = Object.values(campaignMap)
+      .map(c => ({ ...c, roas: c.spend ? c.convValue / c.spend : 0 }))
+      .filter(c => c.impressions > 0 || c.clicks > 0 || c.spend > 0)
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 10)
 
     return NextResponse.json({
       ok: true,
