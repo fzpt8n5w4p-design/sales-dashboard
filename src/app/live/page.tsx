@@ -128,10 +128,11 @@ export default function LivePage() {
   const [meta, setMeta] = useState<{ fetchedAt: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [dims, setDims] = useState({ w: 0, h: 0 })
-  const [lastOrder, setLastOrder] = useState<Ping | null>(null)
+  const [recentOrders, setRecentOrders] = useState<Ping[]>([]) // newest first, max 3
   const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.4 })
   const [visitorTotal, setVisitorTotal] = useState<number | null>(null) // null = GA4 not configured
   const [visitorToday, setVisitorToday] = useState<number>(0)
+  const [ads, setAds] = useState<{ spend: number; roas: number } | null>(null) // null = Google Ads not available
 
   const seen = useRef<Set<string>>(new Set())
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
@@ -161,7 +162,7 @@ export default function LivePage() {
       ...a,
       { key, startLat: p.lat, startLng: p.lng, endLat: warehouse.current.lat, endLng: warehouse.current.lng, color },
     ])
-    setLastOrder(p)
+    setRecentOrders(prev => [p, ...prev].slice(0, 3))
     timeouts.current.push(setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2000))
     timeouts.current.push(setTimeout(() => setArcs(a => a.filter(x => x.key !== key)), 2800))
   }, [])
@@ -203,6 +204,18 @@ export default function LivePage() {
       /* visitors are best-effort; never block the page */
     }
   }, [rebuildPoints])
+
+  // Poll Google Ads spend/ROAS (today). Changes slowly, so poll infrequently.
+  const loadAds = useCallback(async () => {
+    try {
+      const res = await fetch('/api/google-ads', { cache: 'no-store' })
+      const json = await res.json()
+      if (json.ok && json.account) setAds({ spend: json.account.spend, roas: json.account.roas })
+      else setAds(null)
+    } catch {
+      /* ad data is best-effort */
+    }
+  }, [])
 
   const load = useCallback(async (isFirst: boolean) => {
     try {
@@ -247,18 +260,21 @@ export default function LivePage() {
     window.addEventListener('resize', setSize)
     load(true)
     loadVisitors()
+    loadAds()
     const iv = setInterval(() => load(false), REFRESH)
     const vv = setInterval(loadVisitors, REFRESH)
+    const av = setInterval(loadAds, 5 * 60 * 1000) // ad spend changes slowly
     // Gentle ambient pulse every ~2s so the globe always feels alive.
     const amb = setInterval(emitAmbient, 2000)
     return () => {
       window.removeEventListener('resize', setSize)
       clearInterval(iv)
       clearInterval(vv)
+      clearInterval(av)
       clearInterval(amb)
       timeouts.current.forEach(clearTimeout)
     }
-  }, [load, loadVisitors, emitAmbient])
+  }, [load, loadVisitors, loadAds, emitAmbient])
 
   return (
     <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -298,7 +314,7 @@ export default function LivePage() {
         </div>
 
         {/* Headline numbers */}
-        <div style={{ display: 'flex', gap: 12, pointerEvents: 'auto' }}>
+        <div style={{ display: 'flex', gap: 10, pointerEvents: 'auto', flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: '64vw' }}>
           {visitorTotal !== null && (
             <Headline label="Visitors now" value={visitorTotal.toLocaleString('en-GB')} accent={t.teal} />
           )}
@@ -307,6 +323,8 @@ export default function LivePage() {
           )}
           <Headline label="Total sales" value={stats ? fmtMoney(stats.totalRevenue) : '—'} />
           <Headline label="Total orders" value={stats ? stats.totalOrders.toLocaleString('en-GB') : '—'} accent={t.blue} />
+          {ads && <Headline label="Ad spend today" value={fmtMoney(ads.spend)} accent={t.orange} />}
+          {ads && <Headline label="ROAS" value={`${ads.roas.toFixed(1)}×`} accent={t.green} />}
         </div>
       </header>
 
@@ -356,23 +374,33 @@ export default function LivePage() {
         </Panel>
       </div>
 
-      {/* Latest order ticker */}
-      {lastOrder && (
+      {/* Recent orders — newest on top, older ones fade for a sense of history */}
+      {recentOrders.length > 0 && (
         <div style={{
-          position: 'absolute', bottom: 24, left: 28, padding: '12px 16px',
-          background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 12,
-          backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
-          maxWidth: 360,
+          position: 'absolute', bottom: 24, left: 28, width: 360,
+          display: 'flex', flexDirection: 'column', gap: 8,
         }}>
-          <div style={{ fontSize: 10, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.6 }}>Latest order</div>
-          <div style={{ fontSize: 14, color: t.text1, marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 9, height: 9, borderRadius: '50%', background: channelColor(lastOrder.channel) }} />
-            <strong>{fmtMoney(lastOrder.value)}</strong>
-            <span style={{ color: t.text2 }}>· {lastOrder.channel}</span>
-          </div>
-          <div style={{ fontSize: 12, color: t.text2, marginTop: 2 }}>
-            {[lastOrder.product, [lastOrder.city, lastOrder.country].filter(Boolean).join(', ')].filter(Boolean).join('  ·  ')}
-          </div>
+          {recentOrders.map((o, i) => (
+            <div key={`${o.id}-${i}`} style={{
+              padding: '12px 16px', background: t.card, border: `1px solid ${t.cardBorder}`,
+              borderRadius: 12, backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
+              opacity: i === 0 ? 1 : i === 1 ? 0.66 : 0.42, transition: 'opacity 0.4s',
+            }}>
+              {i === 0 && (
+                <div style={{ fontSize: 10, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 4 }}>
+                  Latest orders
+                </div>
+              )}
+              <div style={{ fontSize: 14, color: t.text1, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 9, height: 9, borderRadius: '50%', background: channelColor(o.channel) }} />
+                <strong>{fmtMoney(o.value)}</strong>
+                <span style={{ color: t.text2 }}>· {o.channel}</span>
+              </div>
+              <div style={{ fontSize: 12, color: t.text2, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {[o.product, [o.city, o.country].filter(Boolean).join(', ')].filter(Boolean).join('  ·  ')}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </main>
@@ -384,7 +412,7 @@ function Headline({ label, value, accent }: { label: string; value: string; acce
   return (
     <div style={{
       background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14,
-      padding: '12px 18px', minWidth: 132, textAlign: 'right',
+      padding: '11px 16px', minWidth: 112, textAlign: 'right',
       backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
     }}>
       <div style={{ fontSize: 10, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</div>
