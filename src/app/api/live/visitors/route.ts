@@ -28,7 +28,8 @@ function getAuth(): GoogleAuth | null {
 }
 
 export async function GET() {
-  const propertyId = process.env.GA4_PROPERTY_ID
+  // ridecore.pro GA4 property; override per deployment via GA4_PROPERTY_ID.
+  const propertyId = process.env.GA4_PROPERTY_ID || '328365624'
   const auth = getAuth()
   if (!propertyId || !auth) {
     return NextResponse.json({ ok: true, configured: false, total: 0, pings: [] })
