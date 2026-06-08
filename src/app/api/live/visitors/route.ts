@@ -87,6 +87,27 @@ export async function GET() {
     const data = await res.json()
     const rows: any[] = data.rows || []
 
+    // "Visitors today" — a standard report (realtime only covers ~30 min).
+    let today = 0
+    try {
+      const tRes = await fetch(
+        `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({
+            dateRanges: [{ startDate: 'today', endDate: 'today' }],
+            metrics: [{ name: 'activeUsers' }],
+          }),
+        }
+      )
+      if (tRes.ok) {
+        const tData = await tRes.json()
+        today = parseInt(tData.rows?.[0]?.metricValues?.[0]?.value || '0', 10) || 0
+      }
+    } catch { /* today is best-effort */ }
+
     let total = 0
     const pings: { lat: number; lng: number; users: number; city: string; country: string }[] = []
     for (const row of rows) {
@@ -98,8 +119,8 @@ export async function GET() {
       if (coords) pings.push({ lat: coords.lat, lng: coords.lng, users, city, country })
     }
 
-    return NextResponse.json({ ok: true, configured: true, total, pings })
+    return NextResponse.json({ ok: true, configured: true, total, today, pings })
   } catch (err: any) {
-    return NextResponse.json({ ok: false, configured: true, error: err.message, total: 0, pings: [] }, { status: 200 })
+    return NextResponse.json({ ok: false, configured: true, error: err.message, total: 0, today: 0, pings: [] }, { status: 200 })
   }
 }

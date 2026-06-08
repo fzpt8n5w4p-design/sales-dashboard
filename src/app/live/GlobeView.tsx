@@ -31,8 +31,9 @@ interface Props {
   focus: { lat: number; lng: number; altitude: number }
 }
 
-const COUNTRIES_URL =
-  '//unpkg.com/three-globe/example/datasets/ne_110m_admin_0_countries.geojson'
+// Self-hosted detailed (50m) country outlines — vector, so they stay crisp at
+// any zoom (a raster earth texture goes blurry when magnified onto the UK).
+const COUNTRIES_URL = '/countries-50m.geojson'
 
 export default function GlobeView({ width, height, points, rings, arcs, focus }: Props) {
   const globeEl = useRef<any>(null)
@@ -107,10 +108,10 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
       atmosphereAltitude={0.22}
       // Country outlines for definition
       polygonsData={countries}
-      polygonCapColor={() => 'rgba(255,255,255,0.015)'}
+      polygonCapColor={() => 'rgba(90,120,170,0.10)'}
       polygonSideColor={() => 'rgba(0,0,0,0)'}
-      polygonStrokeColor={() => 'rgba(130,180,255,0.5)'}
-      polygonAltitude={0.005}
+      polygonStrokeColor={() => 'rgba(150,200,255,0.65)'}
+      polygonAltitude={0.006}
       // Persistent order + visitor locations
       pointsData={points}
       pointLat="lat"

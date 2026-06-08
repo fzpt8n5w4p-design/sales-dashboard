@@ -38,7 +38,7 @@ interface Stats {
   totalRevenue: number; totalOrders: number
   byChannel: { name: string; orders: number; revenue: number }[]
   topLocations: { label: string; orders: number }[]
-  topProducts: { name: string; qty: number }[]
+  topProducts: { name: string; qty: number; image?: string }[]
 }
 interface LiveData {
   ok: boolean; fetchedAt: string
@@ -46,7 +46,7 @@ interface LiveData {
   pings: Ping[]; stats: Stats
 }
 interface VisitorPing { lat: number; lng: number; users: number; city: string; country: string }
-interface VisitorData { ok: boolean; configured: boolean; total: number; pings: VisitorPing[] }
+interface VisitorData { ok: boolean; configured: boolean; total: number; today?: number; pings: VisitorPing[] }
 
 // Live storefront visitors render in a distinct dim cyan, separate from the
 // channel-coloured order dots.
@@ -131,6 +131,7 @@ export default function LivePage() {
   const [lastOrder, setLastOrder] = useState<Ping | null>(null)
   const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.4 })
   const [visitorTotal, setVisitorTotal] = useState<number | null>(null) // null = GA4 not configured
+  const [visitorToday, setVisitorToday] = useState<number>(0)
 
   const seen = useRef<Set<string>>(new Set())
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
@@ -189,6 +190,7 @@ export default function LivePage() {
       if (!json.configured) { setVisitorTotal(null); return }
       visitorsRef.current = json.pings
       setVisitorTotal(json.total)
+      setVisitorToday(json.today ?? 0)
       // One continuously-pulsing soft cyan ring per live visitor location.
       setVisitorRings(json.pings.map((v, i) => ({
         key: `vis-${i}-${v.city}`,
@@ -300,6 +302,9 @@ export default function LivePage() {
           {visitorTotal !== null && (
             <Headline label="Visitors now" value={visitorTotal.toLocaleString('en-GB')} accent={t.teal} />
           )}
+          {visitorTotal !== null && (
+            <Headline label="Visitors today" value={visitorToday.toLocaleString('en-GB')} accent={t.teal} />
+          )}
           <Headline label="Total sales" value={stats ? fmtMoney(stats.totalRevenue) : '—'} />
           <Headline label="Total orders" value={stats ? stats.totalOrders.toLocaleString('en-GB') : '—'} accent={t.blue} />
         </div>
@@ -336,9 +341,16 @@ export default function LivePage() {
         <Panel title="Top products">
           {stats?.topProducts.length
             ? stats.topProducts.map(p => (
-                <Row key={p.name} left={<span style={{
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 190, display: 'inline-block',
-                }}>{p.name}</span>} right={`${p.qty}`} />
+                <Row key={p.name}
+                  left={<span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    {p.image
+                      ? <img src={p.image} alt="" width={24} height={24} loading="lazy"
+                          style={{ borderRadius: 5, objectFit: 'cover', flexShrink: 0, background: 'rgba(255,255,255,0.06)' }}
+                          onError={e => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }} />
+                      : <span style={{ width: 24, height: 24, borderRadius: 5, flexShrink: 0, background: 'rgba(255,255,255,0.06)' }} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 158 }}>{p.name}</span>
+                  </span>}
+                  right={`${p.qty}`} />
               ))
             : <Empty />}
         </Panel>

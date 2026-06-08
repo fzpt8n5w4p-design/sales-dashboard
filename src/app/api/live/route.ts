@@ -42,7 +42,7 @@ export async function GET() {
     let totalOrders = 0
     const channelMap: Record<string, { orders: number; revenue: number }> = {}
     const locationMap: Record<string, number> = {}
-    const productMap: Record<string, number> = {}
+    const productMap: Record<string, { qty: number; image: string }> = {}
 
     // 30 pages × 100 = 3000 order/day capacity — far above real daily volume.
     await veeqoStreamPages(
@@ -75,7 +75,10 @@ export async function GET() {
           for (const li of items) {
             const s = li.sellable || {}
             const name = s.product_title || s.title || s.sku_code || 'Unknown'
-            productMap[name] = (productMap[name] || 0) + (li.quantity || 1)
+            const img = s.image_url || s.main_thumbnail_url || ''
+            if (!productMap[name]) productMap[name] = { qty: 0, image: img }
+            productMap[name].qty += li.quantity || 1
+            if (!productMap[name].image && img) productMap[name].image = img
           }
 
           const coords = geocode(city, country, id)
@@ -102,7 +105,7 @@ export async function GET() {
       .sort((a, b) => b.orders - a.orders)
       .slice(0, 8)
     const topProducts = Object.entries(productMap)
-      .map(([name, qty]) => ({ name, qty }))
+      .map(([name, d]) => ({ name, qty: d.qty, image: d.image }))
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 8)
 
