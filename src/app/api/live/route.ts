@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { startOfDay } from 'date-fns'
+import { startOfDay, subDays } from 'date-fns'
 import { veeqoStreamPages } from '../veeqo/lib'
 import { geocode } from './geo'
 
@@ -34,23 +34,38 @@ type Ping = {
 
 export async function GET() {
   try {
-    const since = startOfDay(new Date())
-    const sinceISO = encodeURIComponent(since.toISOString())
+    const now = new Date()
+    const since = startOfDay(now)              // today 00:00
+    const yStart = subDays(since, 1)           // yesterday 00:00
+    const sinceMs = since.getTime()
+    const yStartMs = yStart.getTime()
+    // Yesterday up to the same clock time as now — apples-to-apples baseline.
+    const ySameTimeCut = yStartMs + (now.getTime() - sinceMs)
+    const sinceISO = encodeURIComponent(yStart.toISOString())
 
     const pings: Ping[] = []
     let totalRevenue = 0
     let totalOrders = 0
+    let prevRevenue = 0 // yesterday, to the same time of day
+    let prevOrders = 0
     const channelMap: Record<string, { orders: number; revenue: number }> = {}
     const locationMap: Record<string, number> = {}
     const productMap: Record<string, { qty: number; image: string }> = {}
 
-    // 30 pages × 100 = 3000 order/day capacity — far above real daily volume.
+    // Stream from yesterday 00:00: today's orders feed the globe + stats; the
+    // prior day (to the same time) feeds the day-over-day comparison.
+    // 30 pages × 100 = 3000 capacity — far above ~2 days of real volume.
     await veeqoStreamPages(
       `/orders?created_at_min=${sinceISO}`,
       page => {
         for (const o of page) {
-          const id = String(o.id ?? `${o.number ?? ''}-${o.created_at ?? ''}`)
           const value = parseFloat(o.total_price || 0) || 0
+          const t = new Date(o.created_at).getTime()
+          if (t < sinceMs) {
+            if (t >= yStartMs && t <= ySameTimeCut) { prevOrders++; prevRevenue += value }
+            continue
+          }
+          const id = String(o.id ?? `${o.number ?? ''}-${o.created_at ?? ''}`)
           const channel = o.channel?.name || 'Unknown'
           const createdAt = o.created_at || since.toISOString()
 
@@ -114,7 +129,7 @@ export async function GET() {
       fetchedAt: new Date().toISOString(),
       warehouse: warehouseCoords(),
       pings: trimmed,
-      stats: { totalRevenue, totalOrders, byChannel, topLocations, topProducts },
+      stats: { totalRevenue, totalOrders, prevRevenue, prevOrders, byChannel, topLocations, topProducts },
     })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })

@@ -280,7 +280,7 @@ export function geocode(
     // fallback (unknown city) → wide jitter (~±3.5°) so those orders scatter
     // across the country instead of stacking into one blob on the centroid.
     base = centroid
-      ? { lat: centroid.lat, lng: centroid.lng, spread: cityHit ? 0.6 : 7 }
+      ? { lat: centroid.lat, lng: centroid.lng, spread: cityHit ? 0.6 : 4 }
       : null
     memo.set(cacheKey, base)
   }

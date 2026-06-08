@@ -36,6 +36,7 @@ interface Ping {
 }
 interface Stats {
   totalRevenue: number; totalOrders: number
+  prevRevenue?: number; prevOrders?: number
   byChannel: { name: string; orders: number; revenue: number }[]
   topLocations: { label: string; orders: number }[]
   topProducts: { name: string; qty: number; image?: string }[]
@@ -46,7 +47,7 @@ interface LiveData {
   pings: Ping[]; stats: Stats
 }
 interface VisitorPing { lat: number; lng: number; users: number; city: string; country: string }
-interface VisitorData { ok: boolean; configured: boolean; total: number; today?: number; pings: VisitorPing[] }
+interface VisitorData { ok: boolean; configured: boolean; total: number; today?: number; todayDelta?: number | null; pings: VisitorPing[] }
 
 // Live storefront visitors render in a distinct dim cyan, separate from the
 // channel-coloured order dots.
@@ -94,8 +95,9 @@ function computeFocus(pings: Ping[]): { lat: number; lng: number; altitude: numb
   let dLat = 0, dLng = 0
   for (const p of pings) { dLat += Math.abs(p.lat - mLat); dLng += Math.abs(p.lng - mLng) }
   const spread = Math.max(dLat / pings.length, dLng / pings.length) * 2.5
-  // Floor kept fairly high so we don't magnify the low-res texture into blur.
-  const altitude = Math.min(2.5, Math.max(0.95, spread / 25 + 0.7))
+  // Zoom in tight on the order region — the vector country outlines stay crisp
+  // at this range, so we can frame the UK closely.
+  const altitude = Math.min(2.0, Math.max(0.5, spread / 30 + 0.28))
   return { lat: mLat, lng: mLng, altitude }
 }
 
@@ -119,6 +121,10 @@ function fade(c: string, peak: number): (t: number) => string {
 const fmtMoney = (n: number) =>
   `${CUR}${Math.round(n).toLocaleString('en-GB')}`
 
+// % change of cur vs prev; null when there's no usable baseline.
+const pct = (cur: number, prev?: number): number | null =>
+  prev && prev > 0 ? ((cur - prev) / prev) * 100 : null
+
 export default function LivePage() {
   const [points, setPoints] = useState<GlobePoint[]>([])
   const [rings, setRings] = useState<GlobeRing[]>([])
@@ -129,9 +135,10 @@ export default function LivePage() {
   const [error, setError] = useState<string | null>(null)
   const [dims, setDims] = useState({ w: 0, h: 0 })
   const [recentOrders, setRecentOrders] = useState<Ping[]>([]) // newest first, max 3
-  const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.4 })
+  const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.0 })
   const [visitorTotal, setVisitorTotal] = useState<number | null>(null) // null = GA4 not configured
   const [visitorToday, setVisitorToday] = useState<number>(0)
+  const [visitorTodayDelta, setVisitorTodayDelta] = useState<number | null>(null)
   const [ads, setAds] = useState<{ spend: number; roas: number } | null>(null) // null = Google Ads not available
 
   const seen = useRef<Set<string>>(new Set())
@@ -192,6 +199,7 @@ export default function LivePage() {
       visitorsRef.current = json.pings
       setVisitorTotal(json.total)
       setVisitorToday(json.today ?? 0)
+      setVisitorTodayDelta(json.todayDelta ?? null)
       // One continuously-pulsing soft cyan ring per live visitor location.
       setVisitorRings(json.pings.map((v, i) => ({
         key: `vis-${i}-${v.city}`,
@@ -319,10 +327,10 @@ export default function LivePage() {
             <Headline label="Visitors now" value={visitorTotal.toLocaleString('en-GB')} accent={t.teal} />
           )}
           {visitorTotal !== null && (
-            <Headline label="Visitors today" value={visitorToday.toLocaleString('en-GB')} accent={t.teal} />
+            <Headline label="Visitors today" value={visitorToday.toLocaleString('en-GB')} accent={t.teal} delta={visitorTodayDelta} />
           )}
-          <Headline label="Total sales" value={stats ? fmtMoney(stats.totalRevenue) : '—'} />
-          <Headline label="Total orders" value={stats ? stats.totalOrders.toLocaleString('en-GB') : '—'} accent={t.blue} />
+          <Headline label="Total sales" value={stats ? fmtMoney(stats.totalRevenue) : '—'} delta={stats ? pct(stats.totalRevenue, stats.prevRevenue) : null} />
+          <Headline label="Total orders" value={stats ? stats.totalOrders.toLocaleString('en-GB') : '—'} accent={t.blue} delta={stats ? pct(stats.totalOrders, stats.prevOrders) : null} />
           {ads && <Headline label="Ad spend today" value={fmtMoney(ads.spend)} accent={t.orange} />}
           {ads && <Headline label="ROAS" value={`${ads.roas.toFixed(1)}×`} accent={t.green} />}
         </div>
@@ -408,7 +416,9 @@ export default function LivePage() {
 }
 
 // ─── Small presentational helpers ───────────────────────────────────────────
-function Headline({ label, value, accent }: { label: string; value: string; accent?: string }) {
+function Headline({ label, value, accent, delta }: { label: string; value: string; accent?: string; delta?: number | null }) {
+  const showDelta = typeof delta === 'number' && isFinite(delta)
+  const up = (delta ?? 0) >= 0
   return (
     <div style={{
       background: t.card, border: `1px solid ${t.cardBorder}`, borderRadius: 14,
@@ -416,7 +426,14 @@ function Headline({ label, value, accent }: { label: string; value: string; acce
       backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
     }}>
       <div style={{ fontSize: 10, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, color: accent || t.text1, marginTop: 2, letterSpacing: -0.5 }}>{value}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 6, marginTop: 2 }}>
+        <div style={{ fontSize: 26, fontWeight: 600, color: accent || t.text1, letterSpacing: -0.5 }}>{value}</div>
+        {showDelta && (
+          <span style={{ fontSize: 12, fontWeight: 600, color: up ? t.green : t.pink, whiteSpace: 'nowrap' }}>
+            {up ? '▲' : '▼'} {Math.abs(delta as number).toFixed(0)}%{/* down uses pink */}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

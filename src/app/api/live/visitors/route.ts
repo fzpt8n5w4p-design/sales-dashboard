@@ -52,6 +52,51 @@ async function getAccessToken(): Promise<string | null> {
   return null
 }
 
+// "Visitors today" + day-over-day delta from standard reports. Cached because
+// these change slowly and we don't want to spend GA4 core quota every poll.
+type DayStats = { today: number; todayDelta: number | null }
+let dayCache: { data: DayStats; at: number } | null = null
+const DAY_TTL = 2 * 60 * 1000
+
+async function fetchHourly(propertyId: string, token: string, range: 'today' | 'yesterday') {
+  const res = await fetch(
+    `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        dateRanges: [{ startDate: range, endDate: range }],
+        dimensions: [{ name: 'hour' }],
+        metrics: [{ name: 'activeUsers' }],
+      }),
+    }
+  )
+  if (!res.ok) return [] as any[]
+  return ((await res.json()).rows || []) as any[]
+}
+
+async function getDayStats(propertyId: string, token: string): Promise<DayStats> {
+  if (dayCache && Date.now() - dayCache.at < DAY_TTL) return dayCache.data
+  const curHour = new Date().getHours()
+  const [todayRows, yestRows] = await Promise.all([
+    fetchHourly(propertyId, token, 'today'),
+    fetchHourly(propertyId, token, 'yesterday'),
+  ])
+  const sum = (rows: any[], maxHour: number) =>
+    rows.reduce((s, r) => {
+      const h = parseInt(r.dimensionValues?.[0]?.value || '-1', 10)
+      return h >= 0 && h <= maxHour ? s + (parseInt(r.metricValues?.[0]?.value || '0', 10) || 0) : s
+    }, 0)
+  const today = sum(todayRows, 23)
+  const todaySoFar = sum(todayRows, curHour)
+  const yestSoFar = sum(yestRows, curHour)
+  const todayDelta = yestSoFar > 0 ? ((todaySoFar - yestSoFar) / yestSoFar) * 100 : null
+  const data: DayStats = { today, todayDelta }
+  dayCache = { data, at: Date.now() }
+  return data
+}
+
 export async function GET() {
   // ridecore.pro GA4 property; override per deployment via GA4_PROPERTY_ID.
   const propertyId = process.env.GA4_PROPERTY_ID || '328365624'
@@ -87,26 +132,14 @@ export async function GET() {
     const data = await res.json()
     const rows: any[] = data.rows || []
 
-    // "Visitors today" — a standard report (realtime only covers ~30 min).
+    // "Visitors today" + day-over-day delta (cached; realtime only covers ~30 min).
     let today = 0
+    let todayDelta: number | null = null
     try {
-      const tRes = await fetch(
-        `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          cache: 'no-store',
-          body: JSON.stringify({
-            dateRanges: [{ startDate: 'today', endDate: 'today' }],
-            metrics: [{ name: 'activeUsers' }],
-          }),
-        }
-      )
-      if (tRes.ok) {
-        const tData = await tRes.json()
-        today = parseInt(tData.rows?.[0]?.metricValues?.[0]?.value || '0', 10) || 0
-      }
-    } catch { /* today is best-effort */ }
+      const ds = await getDayStats(propertyId, token)
+      today = ds.today
+      todayDelta = ds.todayDelta
+    } catch { /* day stats are best-effort */ }
 
     let total = 0
     const pings: { lat: number; lng: number; users: number; city: string; country: string }[] = []
@@ -119,8 +152,8 @@ export async function GET() {
       if (coords) pings.push({ lat: coords.lat, lng: coords.lng, users, city, country })
     }
 
-    return NextResponse.json({ ok: true, configured: true, total, today, pings })
+    return NextResponse.json({ ok: true, configured: true, total, today, todayDelta, pings })
   } catch (err: any) {
-    return NextResponse.json({ ok: false, configured: true, error: err.message, total: 0, today: 0, pings: [] }, { status: 200 })
+    return NextResponse.json({ ok: false, configured: true, error: err.message, total: 0, today: 0, todayDelta: null, pings: [] }, { status: 200 })
   }
 }
