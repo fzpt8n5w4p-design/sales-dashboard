@@ -36,7 +36,7 @@ async function queryGoogleAds(token: string, customerId: string, query: string) 
   )
   if (!res.ok) {
     const body = await res.text()
-    throw new Error(`Google Ads API ${res.status}: ${body.slice(0, 300)}`)
+    throw new Error(`Google Ads API ${res.status}: ${body.slice(0, 1500)}`)
   }
   const data = await res.json()
   return data.results || []
