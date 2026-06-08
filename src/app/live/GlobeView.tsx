@@ -67,7 +67,8 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
     dir.position.set(1, 1, 1)
     scene.add(dir)
 
-    // Lift the globe material so the texture isn't crushed to black.
+    // Lift the globe material so the texture isn't crushed to black, and
+    // sharpen the map with anisotropic filtering so it's less blurry up close.
     if (typeof g.globeMaterial === 'function') {
       const mat = g.globeMaterial()
       if (mat) {
@@ -75,6 +76,10 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
         mat.emissive = new THREE.Color(0x0b1626)
         mat.emissiveIntensity = 0.45
         mat.shininess = 6
+        if (mat.map && typeof g.renderer === 'function') {
+          mat.map.anisotropy = g.renderer().capabilities.getMaxAnisotropy()
+          mat.map.needsUpdate = true
+        }
         mat.needsUpdate = true
       }
     }
@@ -111,7 +116,7 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
       pointLat="lat"
       pointLng="lng"
       pointColor="color"
-      pointAltitude={0.01}
+      pointAltitude={0.006}
       pointRadius={(d: any) => d.radius}
       pointsMerge={false}
       // Clean fading pulses emitted per order / ambient tick

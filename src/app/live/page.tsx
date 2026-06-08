@@ -94,7 +94,8 @@ function computeFocus(pings: Ping[]): { lat: number; lng: number; altitude: numb
   let dLat = 0, dLng = 0
   for (const p of pings) { dLat += Math.abs(p.lat - mLat); dLng += Math.abs(p.lng - mLng) }
   const spread = Math.max(dLat / pings.length, dLng / pings.length) * 2.5
-  const altitude = Math.min(2.5, Math.max(0.45, spread / 30 + 0.4))
+  // Floor kept fairly high so we don't magnify the low-res texture into blur.
+  const altitude = Math.min(2.5, Math.max(0.95, spread / 25 + 0.7))
   return { lat: mLat, lng: mLng, altitude }
 }
 
@@ -122,6 +123,7 @@ export default function LivePage() {
   const [points, setPoints] = useState<GlobePoint[]>([])
   const [rings, setRings] = useState<GlobeRing[]>([])
   const [arcs, setArcs] = useState<GlobeArc[]>([])
+  const [visitorRings, setVisitorRings] = useState<GlobeRing[]>([]) // continuous visitor pulses
   const [stats, setStats] = useState<Stats | null>(null)
   const [meta, setMeta] = useState<{ fetchedAt: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -137,13 +139,13 @@ export default function LivePage() {
   const pingsRef = useRef<Ping[]>([])
   const visitorsRef = useRef<VisitorPing[]>([])
 
-  // Combine channel-coloured order dots with dim cyan visitor dots.
+  // Combine channel-coloured order dots with small cyan visitor anchors.
   const rebuildPoints = useCallback(() => {
     const orderPts: GlobePoint[] = pingsRef.current.map(p => ({
-      lat: p.lat, lng: p.lng, color: channelColor(p.channel), radius: 0.22,
+      lat: p.lat, lng: p.lng, color: channelColor(p.channel), radius: 0.13,
     }))
     const visitorPts: GlobePoint[] = visitorsRef.current.map(v => ({
-      lat: v.lat, lng: v.lng, color: VISITOR_COLOR, radius: 0.12,
+      lat: v.lat, lng: v.lng, color: VISITOR_COLOR, radius: 0.06,
     }))
     setPoints([...visitorPts, ...orderPts])
   }, [])
@@ -166,10 +168,8 @@ export default function LivePage() {
   // Subtle ambient pulse at a recent order or live-visitor location — keeps the
   // globe alive between real orders (which are sparse). Smaller, dimmer, no arc.
   const emitAmbient = useCallback(() => {
-    const pool: { lat: number; lng: number; color: string }[] = [
-      ...pingsRef.current.slice(0, 40).map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) })),
-      ...visitorsRef.current.map(v => ({ lat: v.lat, lng: v.lng, color: VISITOR_COLOR })),
-    ]
+    // Orders only — visitors have their own continuous pulse rings.
+    const pool = pingsRef.current.slice(0, 40).map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) }))
     if (!pool.length) return
     const p = pool[Math.floor(Math.random() * pool.length)]
     const key = `amb-${keyCounter.current++}`
@@ -189,6 +189,13 @@ export default function LivePage() {
       if (!json.configured) { setVisitorTotal(null); return }
       visitorsRef.current = json.pings
       setVisitorTotal(json.total)
+      // One continuously-pulsing soft cyan ring per live visitor location.
+      setVisitorRings(json.pings.map((v, i) => ({
+        key: `vis-${i}-${v.city}`,
+        lat: v.lat, lng: v.lng,
+        color: fade(VISITOR_COLOR, 0.5),
+        maxR: 1.8, speed: 1.2, period: 1800,
+      })))
       rebuildPoints()
     } catch {
       /* visitors are best-effort; never block the page */
@@ -256,7 +263,7 @@ export default function LivePage() {
       {/* Globe fills the viewport behind the overlays */}
       <div style={{ position: 'absolute', inset: 0 }}>
         {dims.w > 0 && (
-          <GlobeView width={dims.w} height={dims.h} points={points} rings={rings} arcs={arcs} focus={focus} />
+          <GlobeView width={dims.w} height={dims.h} points={points} rings={[...visitorRings, ...rings]} arcs={arcs} focus={focus} />
         )}
       </div>
 

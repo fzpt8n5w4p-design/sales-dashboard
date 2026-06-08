@@ -248,6 +248,7 @@ function canonicalCountry(country: string | null | undefined): string {
 
 // Deterministic jitter from a string seed (order id), ±~0.4° (~30–40km) so
 // repeat orders from the same city fan out instead of stacking on one pixel.
+// Raw deterministic offset in [-0.5, 0.5] per axis from a string seed.
 function jitter(seed: string): LatLng {
   let h = 2166136261
   for (let i = 0; i < seed.length; i++) {
@@ -256,10 +257,11 @@ function jitter(seed: string): LatLng {
   }
   const a = ((h >>> 0) % 1000) / 1000 - 0.5
   const b = (((h >>> 10) >>> 0) % 1000) / 1000 - 0.5
-  return { lat: a * 0.8, lng: b * 0.8 }
+  return { lat: a, lng: b }
 }
 
-const memo = new Map<string, LatLng | null>()
+type Resolved = { lat: number; lng: number; spread: number }
+const memo = new Map<string, Resolved | null>()
 
 export function geocode(
   city: string | null | undefined,
@@ -270,16 +272,23 @@ export function geocode(
   const c = normalize(city)
   const cacheKey = `${c}|${cc}`
 
-  let base: LatLng | null | undefined = memo.get(cacheKey)
+  let base = memo.get(cacheKey)
   if (base === undefined) {
-    base = CITIES[`${c}|${cc}`] || COUNTRY_CENTROIDS[cc] || null
+    const cityHit = CITIES[`${c}|${cc}`]
+    const centroid = cityHit || COUNTRY_CENTROIDS[cc]
+    // Known city → tight jitter (~±0.3°, keeps it on the city). Country-centroid
+    // fallback (unknown city) → wide jitter (~±3.5°) so those orders scatter
+    // across the country instead of stacking into one blob on the centroid.
+    base = centroid
+      ? { lat: centroid.lat, lng: centroid.lng, spread: cityHit ? 0.6 : 7 }
+      : null
     memo.set(cacheKey, base)
   }
   if (!base) return null
 
   const j = jitter(seed)
   return {
-    lat: Math.max(-85, Math.min(85, base.lat + j.lat)),
-    lng: base.lng + j.lng,
+    lat: Math.max(-85, Math.min(85, base.lat + j.lat * base.spread)),
+    lng: base.lng + j.lng * base.spread,
   }
 }
