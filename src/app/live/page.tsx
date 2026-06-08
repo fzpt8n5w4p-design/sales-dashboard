@@ -98,13 +98,21 @@ function computeFocus(pings: Ping[]): { lat: number; lng: number; altitude: numb
   return { lat: mLat, lng: mLng, altitude }
 }
 
-// Dim a #RRGGBB colour to a translucent rgba (for subtle ambient pulses).
-function dim(hex: string, alpha: number): string {
-  const h = hex.replace('#', '')
-  const r = parseInt(h.slice(0, 2), 16)
-  const g = parseInt(h.slice(2, 4), 16)
-  const b = parseInt(h.slice(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+// Parse a #RRGGBB or rgb(a) colour into [r,g,b].
+function rgbTriplet(c: string): [number, number, number] {
+  if (c.startsWith('#')) {
+    const h = c.slice(1)
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+  }
+  const m = c.match(/(\d+)[,\s]+(\d+)[,\s]+(\d+)/)
+  return m ? [+m[1], +m[2], +m[3]] : [255, 255, 255]
+}
+
+// Build a ring colour interpolator that fades smoothly from the centre (peak
+// alpha) to the expanding edge (transparent) — clean, premium pulse.
+function fade(c: string, peak: number): (t: number) => string {
+  const [r, g, b] = rgbTriplet(c)
+  return (t: number) => `rgba(${r},${g},${b},${(peak * (1 - t)).toFixed(3)})`
 }
 
 const fmtMoney = (n: number) =>
@@ -140,38 +148,36 @@ export default function LivePage() {
     setPoints([...visitorPts, ...orderPts])
   }, [])
 
-  // Emit one ping: a bold pulsing ring at the order + an arc into the warehouse.
+  // Emit one ping: a single clean fading ring at the order + an arc into the
+  // warehouse. Ring and arc have separate lifetimes so each finishes gracefully.
   const emitPing = useCallback((p: Ping) => {
     const color = channelColor(p.channel)
     const key = `${p.id}-${keyCounter.current++}`
-    setRings(r => [...r, { key, lat: p.lat, lng: p.lng, color, maxR: 5, speed: 3, period: 700 }])
+    setRings(r => [...r, { key, lat: p.lat, lng: p.lng, color: fade(color, 0.9), maxR: 4, speed: 2.2, period: 2000 }])
     setArcs(a => [
       ...a,
       { key, startLat: p.lat, startLng: p.lng, endLat: warehouse.current.lat, endLng: warehouse.current.lng, color },
     ])
     setLastOrder(p)
-    const to = setTimeout(() => {
-      setRings(r => r.filter(x => x.key !== key))
-      setArcs(a => a.filter(x => x.key !== key))
-    }, 3500)
-    timeouts.current.push(to)
+    timeouts.current.push(setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2000))
+    timeouts.current.push(setTimeout(() => setArcs(a => a.filter(x => x.key !== key)), 2800))
   }, [])
 
   // Subtle ambient pulse at a recent order or live-visitor location — keeps the
   // globe alive between real orders (which are sparse). Smaller, dimmer, no arc.
   const emitAmbient = useCallback(() => {
     const pool: { lat: number; lng: number; color: string }[] = [
-      ...pingsRef.current.slice(0, 40).map(p => ({ lat: p.lat, lng: p.lng, color: dim(channelColor(p.channel), 0.35) })),
+      ...pingsRef.current.slice(0, 40).map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) })),
       ...visitorsRef.current.map(v => ({ lat: v.lat, lng: v.lng, color: VISITOR_COLOR })),
     ]
     if (!pool.length) return
     const p = pool[Math.floor(Math.random() * pool.length)]
     const key = `amb-${keyCounter.current++}`
-    setRings(r => (r.length > 60 ? r : [...r, {
-      key, lat: p.lat, lng: p.lng, color: p.color,
-      maxR: 2.5, speed: 2, period: 1000,
+    setRings(r => (r.length > 24 ? r : [...r, {
+      key, lat: p.lat, lng: p.lng, color: fade(p.color, 0.3),
+      maxR: 2.2, speed: 1.6, period: 2000,
     }]))
-    const to = setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2600)
+    const to = setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2000)
     timeouts.current.push(to)
   }, [])
 
