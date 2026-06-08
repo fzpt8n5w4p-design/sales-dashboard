@@ -45,6 +45,12 @@ interface LiveData {
   warehouse: { lat: number; lng: number }
   pings: Ping[]; stats: Stats
 }
+interface VisitorPing { lat: number; lng: number; users: number; city: string; country: string }
+interface VisitorData { ok: boolean; configured: boolean; total: number; pings: VisitorPing[] }
+
+// Live storefront visitors render in a distinct dim cyan, separate from the
+// channel-coloured order dots.
+const VISITOR_COLOR = 'rgba(100, 210, 255, 0.55)'
 
 // ─── Channel colours (match arcs/rings to the legend) ───────────────────────
 // Each channel gets a distinct colour. Brand names claim a recognisable hue if
@@ -114,12 +120,25 @@ export default function LivePage() {
   const [dims, setDims] = useState({ w: 0, h: 0 })
   const [lastOrder, setLastOrder] = useState<Ping | null>(null)
   const [focus, setFocus] = useState({ lat: 54, lng: -2.5, altitude: 1.4 })
+  const [visitorTotal, setVisitorTotal] = useState<number | null>(null) // null = GA4 not configured
 
   const seen = useRef<Set<string>>(new Set())
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
   const timeouts = useRef<ReturnType<typeof setTimeout>[]>([])
   const keyCounter = useRef(0)
   const pingsRef = useRef<Ping[]>([])
+  const visitorsRef = useRef<VisitorPing[]>([])
+
+  // Combine channel-coloured order dots with dim cyan visitor dots.
+  const rebuildPoints = useCallback(() => {
+    const orderPts: GlobePoint[] = pingsRef.current.map(p => ({
+      lat: p.lat, lng: p.lng, color: channelColor(p.channel), radius: 0.22,
+    }))
+    const visitorPts: GlobePoint[] = visitorsRef.current.map(v => ({
+      lat: v.lat, lng: v.lng, color: VISITOR_COLOR, radius: 0.12,
+    }))
+    setPoints([...visitorPts, ...orderPts])
+  }, [])
 
   // Emit one ping: a bold pulsing ring at the order + an arc into the warehouse.
   const emitPing = useCallback((p: Ping) => {
@@ -138,20 +157,37 @@ export default function LivePage() {
     timeouts.current.push(to)
   }, [])
 
-  // Subtle ambient pulse at a recent order location — keeps the globe alive
-  // between real orders (which are sparse). Smaller, dimmer, no arc.
+  // Subtle ambient pulse at a recent order or live-visitor location — keeps the
+  // globe alive between real orders (which are sparse). Smaller, dimmer, no arc.
   const emitAmbient = useCallback(() => {
-    const recent = pingsRef.current.slice(0, 40)
-    if (!recent.length) return
-    const p = recent[Math.floor(Math.random() * recent.length)]
+    const pool: { lat: number; lng: number; color: string }[] = [
+      ...pingsRef.current.slice(0, 40).map(p => ({ lat: p.lat, lng: p.lng, color: dim(channelColor(p.channel), 0.35) })),
+      ...visitorsRef.current.map(v => ({ lat: v.lat, lng: v.lng, color: VISITOR_COLOR })),
+    ]
+    if (!pool.length) return
+    const p = pool[Math.floor(Math.random() * pool.length)]
     const key = `amb-${keyCounter.current++}`
     setRings(r => (r.length > 60 ? r : [...r, {
-      key, lat: p.lat, lng: p.lng, color: dim(channelColor(p.channel), 0.35),
+      key, lat: p.lat, lng: p.lng, color: p.color,
       maxR: 2.5, speed: 2, period: 1000,
     }]))
     const to = setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2600)
     timeouts.current.push(to)
   }, [])
+
+  // Poll GA4 realtime visitors (no-op if not configured server-side).
+  const loadVisitors = useCallback(async () => {
+    try {
+      const res = await fetch('/api/live/visitors', { cache: 'no-store' })
+      const json: VisitorData = await res.json()
+      if (!json.configured) { setVisitorTotal(null); return }
+      visitorsRef.current = json.pings
+      setVisitorTotal(json.total)
+      rebuildPoints()
+    } catch {
+      /* visitors are best-effort; never block the page */
+    }
+  }, [rebuildPoints])
 
   const load = useCallback(async (isFirst: boolean) => {
     try {
@@ -166,7 +202,7 @@ export default function LivePage() {
       json.stats.byChannel.forEach(c => channelColor(c.name))
       setFocus(computeFocus(json.pings))
       pingsRef.current = json.pings
-      setPoints(json.pings.map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) })))
+      rebuildPoints()
 
       if (isFirst) {
         // Replay today's orders, oldest → newest, spread over ~6s.
@@ -188,23 +224,26 @@ export default function LivePage() {
     } catch (e: any) {
       setError(e?.message || 'Network error')
     }
-  }, [emitPing])
+  }, [emitPing, rebuildPoints])
 
   useEffect(() => {
     const setSize = () => setDims({ w: window.innerWidth, h: window.innerHeight })
     setSize()
     window.addEventListener('resize', setSize)
     load(true)
+    loadVisitors()
     const iv = setInterval(() => load(false), REFRESH)
+    const vv = setInterval(loadVisitors, REFRESH)
     // Gentle ambient pulse every ~2s so the globe always feels alive.
     const amb = setInterval(emitAmbient, 2000)
     return () => {
       window.removeEventListener('resize', setSize)
       clearInterval(iv)
+      clearInterval(vv)
       clearInterval(amb)
       timeouts.current.forEach(clearTimeout)
     }
-  }, [load, emitAmbient])
+  }, [load, loadVisitors, emitAmbient])
 
   return (
     <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -245,6 +284,9 @@ export default function LivePage() {
 
         {/* Headline numbers */}
         <div style={{ display: 'flex', gap: 12, pointerEvents: 'auto' }}>
+          {visitorTotal !== null && (
+            <Headline label="Visitors now" value={visitorTotal.toLocaleString('en-GB')} accent={t.teal} />
+          )}
           <Headline label="Total sales" value={stats ? fmtMoney(stats.totalRevenue) : '—'} />
           <Headline label="Total orders" value={stats ? stats.totalOrders.toLocaleString('en-GB') : '—'} accent={t.blue} />
         </div>

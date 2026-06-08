@@ -8,7 +8,7 @@
 import { useEffect, useRef } from 'react'
 import Globe from 'react-globe.gl'
 
-export interface GlobePoint { lat: number; lng: number; color: string }
+export interface GlobePoint { lat: number; lng: number; color: string; radius: number }
 export interface GlobeRing {
   key: string; lat: number; lng: number; color: string
   maxR: number; speed: number; period: number
@@ -64,7 +64,7 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
       pointLng="lng"
       pointColor="color"
       pointAltitude={0.008}
-      pointRadius={0.22}
+      pointRadius={(d: any) => d.radius}
       pointsMerge={false}
       // Pulsing rings emitted per incoming order
       ringsData={rings}
