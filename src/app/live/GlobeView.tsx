@@ -50,46 +50,55 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
       .catch(() => {})
   }, [])
 
-  // Configure camera, lighting and material once the globe is fully ready —
-  // globeMaterial()/scene() aren't available until then.
-  const handleReady = () => {
-    const g = globeEl.current
-    if (!g) return
-    ready.current = true
-
-    const controls = g.controls()
-    controls.autoRotate = false // keep the camera parked on where orders happen
-    controls.enableZoom = true
-
-    // Brighten the scene so land/oceans read clearly (default lighting is dim).
-    const scene = g.scene()
-    scene.add(new THREE.AmbientLight(0xffffff, 1.4))
-    const dir = new THREE.DirectionalLight(0xffffff, 0.7)
-    dir.position.set(1, 1, 1)
-    scene.add(dir)
-
-    // Lift the globe material so the texture isn't crushed to black, and
-    // sharpen the map with anisotropic filtering so it's less blurry up close.
-    if (typeof g.globeMaterial === 'function') {
-      const mat = g.globeMaterial()
-      if (mat) {
-        mat.color = new THREE.Color(0x4a5a78)
-        mat.emissive = new THREE.Color(0x0b1626)
-        mat.emissiveIntensity = 0.45
-        mat.shininess = 6
-        if (mat.map && typeof g.renderer === 'function') {
-          mat.map.anisotropy = g.renderer().capabilities.getMaxAnisotropy()
-          mat.map.needsUpdate = true
+  // Configure camera, lighting and material once the globe instance and its
+  // imperative methods are available. We poll instead of relying on
+  // onGlobeReady, which can fire before the ref is attached (a race that left
+  // the globe stuck at its default full-world view in production).
+  useEffect(() => {
+    let tries = 0
+    let posed = false
+    let tuned = false
+    const tick = () => {
+      const g = globeEl.current
+      if (g && typeof g.controls === 'function') {
+        // Camera + controls as soon as the instance exists — don't wait on the
+        // texture, or a slow image load leaves the globe at its default view.
+        if (!posed) {
+          const controls = g.controls()
+          controls.autoRotate = false
+          controls.enableZoom = true
+          ready.current = true
+          const f = focusRef.current
+          g.pointOfView({ lat: f.lat, lng: f.lng, altitude: f.altitude }, 0)
+          posed = true
         }
-        mat.needsUpdate = true
+        // Lighting + material once the material is available.
+        const mat = typeof g.globeMaterial === 'function' ? g.globeMaterial() : null
+        if (mat && !tuned) {
+          const scene = g.scene()
+          scene.add(new THREE.AmbientLight(0xffffff, 1.4))
+          const dir = new THREE.DirectionalLight(0xffffff, 0.7)
+          dir.position.set(1, 1, 1)
+          scene.add(dir)
+          mat.color = new THREE.Color(0x4a5a78)
+          mat.emissive = new THREE.Color(0x0b1626)
+          mat.emissiveIntensity = 0.45
+          mat.shininess = 6
+          if (mat.map && typeof g.renderer === 'function') {
+            mat.map.anisotropy = g.renderer().capabilities.getMaxAnisotropy()
+            mat.map.needsUpdate = true
+          }
+          mat.needsUpdate = true
+          tuned = true
+        }
       }
+      if ((!posed || !tuned) && tries++ < 100) setTimeout(tick, 80)
     }
+    tick()
+  }, [])
 
-    const f = focusRef.current
-    g.pointOfView({ lat: f.lat, lng: f.lng, altitude: f.altitude }, 0)
-  }
-
-  // Pan + zoom to frame the live order region whenever it changes.
+  // Pan + zoom to frame the live order region whenever it changes. If the globe
+  // isn't ready yet, the setup effect applies the latest focus when it finishes.
   useEffect(() => {
     const g = globeEl.current
     if (!g || !ready.current) return
@@ -99,7 +108,6 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
   return (
     <Globe
       ref={globeEl}
-      onGlobeReady={handleReady}
       width={width}
       height={height}
       backgroundColor="rgba(0,0,0,0)"
