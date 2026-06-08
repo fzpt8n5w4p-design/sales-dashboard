@@ -92,6 +92,15 @@ function computeFocus(pings: Ping[]): { lat: number; lng: number; altitude: numb
   return { lat: mLat, lng: mLng, altitude }
 }
 
+// Dim a #RRGGBB colour to a translucent rgba (for subtle ambient pulses).
+function dim(hex: string, alpha: number): string {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
 const fmtMoney = (n: number) =>
   `${CUR}${Math.round(n).toLocaleString('en-GB')}`
 
@@ -110,12 +119,13 @@ export default function LivePage() {
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
   const timeouts = useRef<ReturnType<typeof setTimeout>[]>([])
   const keyCounter = useRef(0)
+  const pingsRef = useRef<Ping[]>([])
 
-  // Emit one ping: a pulsing ring at the order + an arc into the warehouse.
+  // Emit one ping: a bold pulsing ring at the order + an arc into the warehouse.
   const emitPing = useCallback((p: Ping) => {
     const color = channelColor(p.channel)
     const key = `${p.id}-${keyCounter.current++}`
-    setRings(r => [...r, { key, lat: p.lat, lng: p.lng, color }])
+    setRings(r => [...r, { key, lat: p.lat, lng: p.lng, color, maxR: 5, speed: 3, period: 700 }])
     setArcs(a => [
       ...a,
       { key, startLat: p.lat, startLng: p.lng, endLat: warehouse.current.lat, endLng: warehouse.current.lng, color },
@@ -125,6 +135,21 @@ export default function LivePage() {
       setRings(r => r.filter(x => x.key !== key))
       setArcs(a => a.filter(x => x.key !== key))
     }, 3500)
+    timeouts.current.push(to)
+  }, [])
+
+  // Subtle ambient pulse at a recent order location — keeps the globe alive
+  // between real orders (which are sparse). Smaller, dimmer, no arc.
+  const emitAmbient = useCallback(() => {
+    const recent = pingsRef.current.slice(0, 40)
+    if (!recent.length) return
+    const p = recent[Math.floor(Math.random() * recent.length)]
+    const key = `amb-${keyCounter.current++}`
+    setRings(r => (r.length > 60 ? r : [...r, {
+      key, lat: p.lat, lng: p.lng, color: dim(channelColor(p.channel), 0.35),
+      maxR: 2.5, speed: 2, period: 1000,
+    }]))
+    const to = setTimeout(() => setRings(r => r.filter(x => x.key !== key)), 2600)
     timeouts.current.push(to)
   }, [])
 
@@ -140,6 +165,7 @@ export default function LivePage() {
       // Assign colours biggest-channel-first so the legend ordering is stable.
       json.stats.byChannel.forEach(c => channelColor(c.name))
       setFocus(computeFocus(json.pings))
+      pingsRef.current = json.pings
       setPoints(json.pings.map(p => ({ lat: p.lat, lng: p.lng, color: channelColor(p.channel) })))
 
       if (isFirst) {
@@ -170,12 +196,15 @@ export default function LivePage() {
     window.addEventListener('resize', setSize)
     load(true)
     const iv = setInterval(() => load(false), REFRESH)
+    // Gentle ambient pulse every ~2s so the globe always feels alive.
+    const amb = setInterval(emitAmbient, 2000)
     return () => {
       window.removeEventListener('resize', setSize)
       clearInterval(iv)
+      clearInterval(amb)
       timeouts.current.forEach(clearTimeout)
     }
-  }, [load])
+  }, [load, emitAmbient])
 
   return (
     <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>

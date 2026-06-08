@@ -9,7 +9,10 @@ import { useEffect, useRef } from 'react'
 import Globe from 'react-globe.gl'
 
 export interface GlobePoint { lat: number; lng: number; color: string }
-export interface GlobeRing { key: string; lat: number; lng: number; color: string }
+export interface GlobeRing {
+  key: string; lat: number; lng: number; color: string
+  maxR: number; speed: number; period: number
+}
 export interface GlobeArc {
   key: string
   startLat: number; startLng: number
@@ -68,9 +71,9 @@ export default function GlobeView({ width, height, points, rings, arcs, focus }:
       ringLat="lat"
       ringLng="lng"
       ringColor={(d: any) => d.color}
-      ringMaxRadius={5}
-      ringPropagationSpeed={3}
-      ringRepeatPeriod={700}
+      ringMaxRadius={(d: any) => d.maxR}
+      ringPropagationSpeed={(d: any) => d.speed}
+      ringRepeatPeriod={(d: any) => d.period}
       // Arcs flying each order into the warehouse
       arcsData={arcs}
       arcStartLat="startLat"
