@@ -21,15 +21,21 @@ async function getAccessToken() {
 }
 
 async function queryGoogleAds(token: string, customerId: string, query: string) {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${token}`,
+    'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
+    'Content-Type': 'application/json',
+  }
+  // When the client account sits under a manager (MCC), the manager ID must be
+  // sent as login-customer-id while the URL targets the client account.
+  const loginId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '')
+  if (loginId) headers['login-customer-id'] = loginId
+
   const res = await fetch(
     `https://googleads.googleapis.com/v23/customers/${customerId}/googleAds:search`,
     {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ query }),
       cache: 'no-store',
     }
