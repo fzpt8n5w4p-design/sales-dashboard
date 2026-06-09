@@ -361,8 +361,6 @@ export default function LivePage() {
         display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto',
         pointerEvents: 'auto',
       }}>
-        <ReadyTile now={clock} data={ready} />
-
         <Panel title="Orders by channel">
           {stats?.byChannel.length
             ? stats.byChannel.map(c => (
@@ -403,13 +401,16 @@ export default function LivePage() {
         </Panel>
       </div>
 
-      {/* Recent orders — newest on top, older ones fade for a sense of history */}
-      {recentOrders.length > 0 && (
-        <div style={{
-          position: 'absolute', bottom: 24, left: 28, width: 360,
-          display: 'flex', flexDirection: 'column', gap: 8,
-        }}>
-          {recentOrders.map((o, i) => (
+      {/* Left rail: fulfilment tile above the recent-orders history */}
+      <div style={{
+        position: 'absolute', bottom: 24, left: 28, width: 360,
+        display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: 'auto',
+      }}>
+        <ReadyTile now={clock} data={ready} />
+
+        {recentOrders.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {recentOrders.map((o, i) => (
             <div key={`${o.id}-${i}`} style={{
               padding: '12px 16px', background: t.card, border: `1px solid ${t.cardBorder}`,
               borderRadius: 12, backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
@@ -429,9 +430,10 @@ export default function LivePage() {
                 {[o.product, [o.city, o.country].filter(Boolean).join(', ')].filter(Boolean).join('  ·  ')}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </main>
   )
 }
