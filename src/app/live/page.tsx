@@ -287,7 +287,7 @@ export default function LivePage() {
     const iv = setInterval(() => load(false), REFRESH)
     const vv = setInterval(loadVisitors, REFRESH)
     const av = setInterval(loadAds, 5 * 60 * 1000) // ad spend changes slowly
-    const rv = setInterval(loadReady, 90 * 1000) // fulfilment changes moderately
+    const rv = setInterval(loadReady, 5 * 60 * 1000) // fulfilment changes slowly + endpoint is heavy
     const ck = setInterval(() => setClock(new Date()), 1000) // cutoff countdown
     // Gentle ambient pulse every ~2s so the globe always feels alive.
     const amb = setInterval(emitAmbient, 2000)

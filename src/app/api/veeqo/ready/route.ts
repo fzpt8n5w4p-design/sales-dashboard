@@ -57,52 +57,58 @@ function getOrderWarehouses(o: any): string[] {
 let cache: { data: any; at: number } | null = null
 const CACHE_TTL = 3 * 60 * 1000
 
+// Coalesce concurrent requests: while one fetch is in flight, everyone else
+// awaits it instead of firing their own (prevents a thundering herd that makes
+// Veeqo rate-limiting far worse when several pollers hit at once).
+let inFlight: Promise<any> | null = null
+
+async function computeReady() {
+  const now = new Date()
+  const yesterdayStart = new Date(now)
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+  yesterdayStart.setHours(0, 0, 0, 0)
+  const yesterdayEnd = new Date(now)
+  yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
+  yesterdayEnd.setHours(23, 59, 59, 999)
+
+  // Use updated_at_min to limit shipped orders to recent ones, filter client-side.
+  const orders = await fetchAllPages('/orders?status=awaiting_fulfillment')
+  const shippedOrders = await fetchAllPages(`/orders?status=shipped&updated_at_min=${yesterdayStart.toISOString()}`)
+
+  const readyToShip = orders.filter((o: any) => {
+    if (FBA_TYPES.has(o.channel?.type_code)) return false
+    const tags = getOrderTags(o)
+    if (tags.some(tag => EXCLUDED_TAGS.has(tag))) return false
+    const warehouses = getOrderWarehouses(o)
+    if (!warehouses.some(w => w === 'Wirral Warehouse')) return false
+    return true
+  }).length
+
+  const preOrders = orders.filter((o: any) => {
+    const tags = getOrderTags(o)
+    return tags.some(tag => PRE_ORDER_TAGS.has(tag))
+  }).length
+
+  const shippedYesterday = shippedOrders.filter((o: any) => {
+    if (FBA_TYPES.has(o.channel?.type_code)) return false
+    const shippedAt = o.shipped_at ? new Date(o.shipped_at) : null
+    if (!shippedAt || shippedAt < yesterdayStart || shippedAt > yesterdayEnd) return false
+    const warehouses = getOrderWarehouses(o)
+    return warehouses.some(w => w === 'Wirral Warehouse')
+  }).length
+
+  const data = { ok: true, readyToShip, preOrders, shippedYesterday, total: orders.length }
+  cache = { data, at: Date.now() }
+  return data
+}
+
 export async function GET() {
   if (cache && Date.now() - cache.at < CACHE_TTL) {
     return NextResponse.json({ ...cache.data, cached: true })
   }
   try {
-    const now = new Date()
-    const yesterdayStart = new Date(now)
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1)
-    yesterdayStart.setHours(0, 0, 0, 0)
-    const yesterdayEnd = new Date(now)
-    yesterdayEnd.setDate(yesterdayEnd.getDate() - 1)
-    yesterdayEnd.setHours(23, 59, 59, 999)
-
-    // Fetch awaiting orders and recently shipped orders
-    // Use updated_at_min to limit shipped orders to recent ones, then filter by shipped_at client-side
-    const orders = await fetchAllPages('/orders?status=awaiting_fulfillment')
-    const shippedOrders = await fetchAllPages(`/orders?status=shipped&updated_at_min=${yesterdayStart.toISOString()}`)
-
-    // Ready to ship: non-FBA, Wirral Warehouse, no excluded tags
-    const readyToShip = orders.filter((o: any) => {
-      if (FBA_TYPES.has(o.channel?.type_code)) return false
-      const tags = getOrderTags(o)
-      if (tags.some(tag => EXCLUDED_TAGS.has(tag))) return false
-      const warehouses = getOrderWarehouses(o)
-      if (!warehouses.some(w => w === 'Wirral Warehouse')) return false
-      return true
-    }).length
-
-    // Pre-orders: tagged pre order/pre-order, awaiting_fulfillment status (already filtered)
-    const preOrders = orders.filter((o: any) => {
-      const tags = getOrderTags(o)
-      return tags.some(tag => PRE_ORDER_TAGS.has(tag))
-    }).length
-
-    // Shipped yesterday from Wirral Warehouse (non-FBA)
-    // Filter by shipped_at date, not created_at
-    const shippedYesterday = shippedOrders.filter((o: any) => {
-      if (FBA_TYPES.has(o.channel?.type_code)) return false
-      const shippedAt = o.shipped_at ? new Date(o.shipped_at) : null
-      if (!shippedAt || shippedAt < yesterdayStart || shippedAt > yesterdayEnd) return false
-      const warehouses = getOrderWarehouses(o)
-      return warehouses.some(w => w === 'Wirral Warehouse')
-    }).length
-
-    const data = { ok: true, readyToShip, preOrders, shippedYesterday, total: orders.length }
-    cache = { data, at: Date.now() }
+    if (!inFlight) inFlight = computeReady().finally(() => { inFlight = null })
+    const data = await inFlight
     return NextResponse.json(data)
   } catch (err: any) {
     // Serve stale cache if available so a transient Veeqo error doesn't blank the tile.
