@@ -51,7 +51,16 @@ function getOrderWarehouses(o: any): string[] {
   return (o.allocations || []).map((a: any) => a.warehouse?.name || '').filter(Boolean)
 }
 
+// Cache the small result. The underlying paged fetches are slow and Veeqo
+// rate-limits under load, so without this every poll (live view + main
+// dashboard) pays the full cost. 3-min freshness is fine for fulfilment counts.
+let cache: { data: any; at: number } | null = null
+const CACHE_TTL = 3 * 60 * 1000
+
 export async function GET() {
+  if (cache && Date.now() - cache.at < CACHE_TTL) {
+    return NextResponse.json({ ...cache.data, cached: true })
+  }
   try {
     const now = new Date()
     const yesterdayStart = new Date(now)
@@ -92,8 +101,12 @@ export async function GET() {
       return warehouses.some(w => w === 'Wirral Warehouse')
     }).length
 
-    return NextResponse.json({ ok: true, readyToShip, preOrders, shippedYesterday, total: orders.length })
+    const data = { ok: true, readyToShip, preOrders, shippedYesterday, total: orders.length }
+    cache = { data, at: Date.now() }
+    return NextResponse.json(data)
   } catch (err: any) {
+    // Serve stale cache if available so a transient Veeqo error doesn't blank the tile.
+    if (cache) return NextResponse.json({ ...cache.data, cached: true, stale: true })
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
   }
 }
