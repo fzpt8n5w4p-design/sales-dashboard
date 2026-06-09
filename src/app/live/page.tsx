@@ -140,6 +140,8 @@ export default function LivePage() {
   const [visitorToday, setVisitorToday] = useState<number>(0)
   const [visitorTodayDelta, setVisitorTodayDelta] = useState<number | null>(null)
   const [ads, setAds] = useState<{ spend: number; roas: number } | null>(null) // null = Google Ads not available
+  const [ready, setReady] = useState<{ readyToShip: number; shippedYesterday: number } | null>(null)
+  const [clock, setClock] = useState<Date | null>(null) // ticks each second for the cutoff countdown
 
   const seen = useRef<Set<string>>(new Set())
   const warehouse = useRef({ lat: 52.4862, lng: -1.8904 })
@@ -225,6 +227,17 @@ export default function LivePage() {
     }
   }, [])
 
+  // Poll fulfilment (ready-to-ship + shipped yesterday) from the dedicated route.
+  const loadReady = useCallback(async () => {
+    try {
+      const res = await fetch('/api/veeqo/ready', { cache: 'no-store' })
+      const json = await res.json()
+      if (json.ok) setReady({ readyToShip: json.readyToShip, shippedYesterday: json.shippedYesterday })
+    } catch {
+      /* fulfilment is best-effort */
+    }
+  }, [])
+
   const load = useCallback(async (isFirst: boolean) => {
     try {
       const res = await fetch('/api/live', { cache: 'no-store' })
@@ -269,9 +282,13 @@ export default function LivePage() {
     load(true)
     loadVisitors()
     loadAds()
+    loadReady()
+    setClock(new Date())
     const iv = setInterval(() => load(false), REFRESH)
     const vv = setInterval(loadVisitors, REFRESH)
     const av = setInterval(loadAds, 5 * 60 * 1000) // ad spend changes slowly
+    const rv = setInterval(loadReady, 90 * 1000) // fulfilment changes moderately
+    const ck = setInterval(() => setClock(new Date()), 1000) // cutoff countdown
     // Gentle ambient pulse every ~2s so the globe always feels alive.
     const amb = setInterval(emitAmbient, 2000)
     return () => {
@@ -279,10 +296,12 @@ export default function LivePage() {
       clearInterval(iv)
       clearInterval(vv)
       clearInterval(av)
+      clearInterval(rv)
+      clearInterval(ck)
       clearInterval(amb)
       timeouts.current.forEach(clearTimeout)
     }
-  }, [load, loadVisitors, loadAds, emitAmbient])
+  }, [load, loadVisitors, loadAds, loadReady, emitAmbient])
 
   return (
     <main style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
@@ -342,6 +361,8 @@ export default function LivePage() {
         display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto',
         pointerEvents: 'auto',
       }}>
+        <ReadyTile now={clock} data={ready} />
+
         <Panel title="Orders by channel">
           {stats?.byChannel.length
             ? stats.byChannel.map(c => (
@@ -432,6 +453,54 @@ function Headline({ label, value, accent, delta }: { label: string; value: strin
           <span style={{ fontSize: 12, fontWeight: 600, color: up ? t.green : t.pink, whiteSpace: 'nowrap' }}>
             {up ? '▲' : '▼'} {Math.abs(delta as number).toFixed(0)}%{/* down uses pink */}
           </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ReadyTile({ now, data }: { now: Date | null; data: { readyToShip: number; shippedYesterday: number } | null }) {
+  const qty = data?.readyToShip ?? 0
+  const hasOrders = qty > 0
+  const current = now ?? new Date()
+  const cutoff = new Date(current); cutoff.setHours(15, 0, 0, 0)
+  const isPast = current.getTime() > cutoff.getTime()
+  const next = isPast ? new Date(cutoff.getTime() + 86400000) : cutoff
+  const diff = next.getTime() - current.getTime()
+  const urgent = !isPast && diff < 3600000
+  const warning = !isPast && diff < 7200000
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const countdown = now
+    ? `${pad(Math.floor(diff / 3600000))}:${pad(Math.floor((diff % 3600000) / 60000))}:${pad(Math.floor((diff % 60000) / 1000))}`
+    : '--:--:--'
+  const accent = !hasOrders ? t.text3 : isPast || urgent ? t.pink : warning ? t.orange : t.green
+  const bg = !hasOrders ? 'transparent' : isPast || urgent ? 'rgba(255,55,95,0.08)' : warning ? 'rgba(255,159,10,0.07)' : 'rgba(48,209,88,0.07)'
+  const border = !hasOrders ? t.cardBorder : isPast || urgent ? 'rgba(255,55,95,0.25)' : warning ? 'rgba(255,159,10,0.2)' : 'rgba(48,209,88,0.18)'
+  const timeColor = (isPast || urgent) && hasOrders ? t.pink : warning && hasOrders ? t.orange : t.text2
+  return (
+    <div style={{
+      position: 'relative', overflow: 'hidden', background: t.card, border: `1px solid ${border}`,
+      borderRadius: 14, padding: 14, backdropFilter: 'blur(40px)', WebkitBackdropFilter: 'blur(40px)',
+    }}>
+      <div style={{ position: 'absolute', inset: 0, background: bg, pointerEvents: 'none' }} />
+      <div style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.6, color: accent, border: `1px solid ${accent}`, borderRadius: 20, padding: '3px 9px' }}>Fulfilment</span>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 9, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.5 }}>{isPast ? 'Next cutoff tomorrow' : 'Ship by 3:00 PM'}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.2, color: timeColor, fontVariantNumeric: 'tabular-nums' }}>{countdown}</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: t.text3, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 10 }}>Ready to Ship</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
+          <div style={{ fontSize: 40, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: hasOrders ? accent : t.text3 }}>{qty.toLocaleString('en-GB')}</div>
+          <div style={{ fontSize: 12, color: t.text2 }}>orders</div>
+        </div>
+        <div style={{ fontSize: 11, color: t.text3, marginTop: 8 }}>Wirral Warehouse — excludes FBA</div>
+        {data && (
+          <div style={{ fontSize: 12, color: t.text2, marginTop: 6 }}>
+            <span style={{ fontWeight: 600, color: t.text1 }}>{data.shippedYesterday.toLocaleString('en-GB')}</span> shipped yesterday
+          </div>
         )}
       </div>
     </div>
